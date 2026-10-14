@@ -128,6 +128,9 @@
       id: Math.random().toString(36).slice(2, 10),
       name: name || `Zone ${state.zones.length + 1}`,
       color,
+      fill: color,
+      fillOpacity: 0.25,
+      width: 3,
       items: [],
       outline: true,
       individual: true,
@@ -187,6 +190,9 @@
         id: String(z.id || Math.random().toString(36).slice(2, 10)),
         name: String(z.name || `Zone ${i + 1}`),
         color: /^#[0-9a-f]{6}$/i.test(z.color) ? z.color : COLORS[i % COLORS.length],
+        fill: /^#[0-9a-f]{6}$/i.test(z.fill) ? z.fill : /^#[0-9a-f]{6}$/i.test(z.color) ? z.color : COLORS[i % COLORS.length],
+        fillOpacity: Number.isFinite(z.fillOpacity) ? Math.max(0, Math.min(1, z.fillOpacity)) : 0.25,
+        width: Number.isFinite(z.width) ? Math.max(1, Math.min(10, z.width)) : 3,
         items: z.items.filter((id) => typeof id === 'string'),
         outline: z.outline !== false,
         individual: z.individual !== false,
@@ -211,11 +217,11 @@
     const zones = membership.get(id) || [];
     const active = activeZone();
     if (active && zones.includes(active.id)) {
-      return { color: active.color, weight: 1.6, opacity: 1, fillColor: active.color, fillOpacity: 0.35 };
+      return { color: active.color, weight: 1.4, opacity: 1, fillColor: active.fill, fillOpacity: 0.15 };
     }
     if (zones.length) {
       const other = state.zones.find((z) => z.id === zones[0]);
-      return { color: '#555', weight: 0.8, opacity: 0.7, fillColor: other ? other.color : '#888', fillOpacity: 0.14 };
+      return { color: other ? other.color : '#555', weight: 0.8, opacity: 0.6, fillColor: '#000', fillOpacity: 0.01 };
     }
     return { color: '#4b4f55', weight: 0.7, opacity: 0.65, fillColor: '#000', fillOpacity: 0.01 };
   }
@@ -288,7 +294,15 @@
           L.geoJSON(g, {
             renderer,
             interactive: false,
-            style: { color: z.color, weight: active ? 4 : 2.5, opacity: 0.95, fill: false, dashArray: active ? null : '6 5' },
+            style: {
+              color: z.color,
+              weight: active ? z.width + 1 : z.width,
+              opacity: 0.95,
+              fill: z.fillOpacity > 0,
+              fillColor: z.fill,
+              fillOpacity: z.fillOpacity,
+              dashArray: active ? null : '6 5',
+            },
           })
         );
       } catch (e) {
@@ -350,26 +364,24 @@
       class: 'zone' + (active ? ' active' : ''),
       style: `--zc:${z.color}`,
       onclick: (e) => {
-        if (active || e.target.closest('button,label,textarea,summary,a,input[type=color],input[type=checkbox]')) return;
+        if (active || e.target.closest('button,label,textarea,summary,a,input:not(.name)')) return;
         state.activeId = z.id;
         const focusName = e.target.classList.contains('name');
         changed();
         if (focusName) $('#zones .zone.active .name')?.focus();
       },
     });
+    const swatch = el('span', { class: 'swatch', title: 'Outline and shading' });
+    const paintSwatch = () => {
+      swatch.style.borderColor = z.color;
+      swatch.style.background = z.fillOpacity > 0 ? hexA(z.fill, z.fillOpacity) : 'transparent';
+      card.style.setProperty('--zc', z.color);
+    };
+    paintSwatch();
     const head = el(
       'div',
       { class: 'zone-head' },
-      el('input', {
-        type: 'color',
-        value: z.color,
-        title: 'Zone colour',
-        oninput: (e) => {
-          z.color = e.target.value;
-          card.style.setProperty('--zc', z.color);
-        },
-        onchange: () => changed(),
-      }),
+      swatch,
       el('input', {
         class: 'name',
         type: 'text',
@@ -391,6 +403,7 @@
           copy.items = [...z.items];
           copy.outline = z.outline;
           copy.individual = z.individual;
+          Object.assign(copy, { color: z.color, fill: z.fill, fillOpacity: z.fillOpacity, width: z.width });
           changed();
         },
       }, '⧉'),
@@ -415,7 +428,8 @@
         { class: 'zone-opts' },
         el('label', {}, el('input', { type: 'checkbox', checked: z.outline, onchange: (e) => { z.outline = e.target.checked; save(); } }), 'Combined outline'),
         el('label', {}, el('input', { type: 'checkbox', checked: z.individual, onchange: (e) => { z.individual = e.target.checked; save(); } }), 'Each area as its own zone')
-      )
+      ),
+      styleControls(z, paintSwatch)
     );
 
     if (active) {
@@ -459,6 +473,35 @@
     );
     card.append(body);
     return card;
+  }
+
+  // Outline colour + width, shading colour + opacity. Live preview while dragging, saved on release.
+  function styleControls(z, paintSwatch) {
+    const live = () => {
+      paintSwatch();
+      refreshOutlines();
+    };
+    const pct = el('span', { class: 'val' }, `${Math.round(z.fillOpacity * 100)}%`);
+    const px = el('span', { class: 'val' }, `${z.width}px`);
+    return el(
+      'div',
+      { class: 'zone-style' },
+      el('label', { title: 'Outline colour' }, 'Outline',
+        el('input', { type: 'color', value: z.color, oninput: (e) => { z.color = e.target.value; live(); }, onchange: () => changed() })),
+      el('label', { title: 'Outline width' },
+        el('input', { type: 'range', min: 1, max: 8, step: 0.5, value: z.width, oninput: (e) => { z.width = +e.target.value; px.textContent = `${z.width}px`; live(); }, onchange: () => save() }),
+        px),
+      el('label', { title: 'Shading colour' }, 'Shading',
+        el('input', { type: 'color', value: z.fill, oninput: (e) => { z.fill = e.target.value; live(); }, onchange: () => changed() })),
+      el('label', { title: 'Shading opacity (0% = no shading)' },
+        el('input', { type: 'range', min: 0, max: 100, step: 5, value: Math.round(z.fillOpacity * 100), oninput: (e) => { z.fillOpacity = e.target.value / 100; pct.textContent = `${e.target.value}%`; live(); }, onchange: () => save() }),
+        pct)
+    );
+  }
+
+  function hexA(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`;
   }
 
   function addPasted(zone, ta, msg) {
@@ -566,7 +609,7 @@
             if (geom) areas.push({ name: itemLabel(item, true), geom, description: `${DS_LABEL[item.ds]} · ${z.name}` });
           }
         }
-        out.push({ name: z.name, color: z.color, outline, areas, description: names.join(', ') });
+        out.push({ name: z.name, color: z.color, fill: z.fill, fillOpacity: z.fillOpacity, width: z.width, outline, areas, description: names.join(', ') });
       }
       const name = safeFileName(fileName);
       const kml = KZB.buildKml(out, { docName: name, folders: state.settings.folders });

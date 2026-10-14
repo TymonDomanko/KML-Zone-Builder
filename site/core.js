@@ -123,6 +123,15 @@
     const a = Math.round(opacity * 255).toString(16).padStart(2, '0');
     return (a + h.slice(4, 6) + h.slice(2, 4) + h.slice(0, 2)).toLowerCase();
   }
+  function lineStyle(hex, opacity, width) {
+    return `<LineStyle><color>${kmlColor(hex, opacity)}</color><width>${+width.toFixed(1)}</width></LineStyle>`;
+  }
+  function polyStyle(hex, opacity) {
+    // opacity 0 means no shading at all
+    return opacity > 0
+      ? `<PolyStyle><color>${kmlColor(hex, opacity)}</color></PolyStyle>`
+      : `<PolyStyle><fill>0</fill></PolyStyle>`;
+  }
   function ringKml(ring) {
     const pts = ring.map((p) => `${+p[0].toFixed(6)},${+p[1].toFixed(6)},0`);
     const f = ring[0];
@@ -158,7 +167,7 @@
   }
 
   /**
-   * zones: [{ name, color, description, outline: Geometry|null, areas: [{ name, geom, description }] }]
+   * zones: [{ name, color (outline), fill (shading colour), fillOpacity (0–1), width (outline px), description, outline: Geometry|null, areas: [{ name, geom, description }] }]
  * outline is the combined outline (or null to leave it out); areas are the individual areas (may be empty).
    * options: { docName, folders (default true) }
    */
@@ -169,11 +178,13 @@
     out.push('<kml xmlns="http://www.opengis.net/kml/2.2"><Document>');
     out.push(`<name>${esc(options.docName || 'Zones')}</name>`);
     zones.forEach((z, i) => {
+      const fill = z.fill || z.color;
+      const op = z.fillOpacity == null ? 0.25 : Math.max(0, Math.min(1, z.fillOpacity));
+      const width = z.width || 3;
       out.push(
-        `<Style id="zone${i}"><LineStyle><color>${kmlColor(z.color, 1)}</color><width>3</width></LineStyle>` +
-          `<PolyStyle><color>${kmlColor(z.color, 0.25)}</color></PolyStyle></Style>`,
-        `<Style id="zone${i}area"><LineStyle><color>${kmlColor(z.color, 0.9)}</color><width>1.5</width></LineStyle>` +
-          `<PolyStyle><color>${kmlColor(z.color, 0.12)}</color></PolyStyle></Style>`
+        `<Style id="zone${i}">${lineStyle(z.color, 1, width)}${polyStyle(fill, op)}</Style>`,
+        // individual areas: same colours, thinner line and half the shading so they read under the outline
+        `<Style id="zone${i}area">${lineStyle(z.color, 0.9, Math.max(1, width / 2))}${polyStyle(fill, op / 2)}</Style>`
       );
     });
     zones.forEach((z, i) => {

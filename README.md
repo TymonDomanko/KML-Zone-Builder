@@ -13,6 +13,8 @@ Build KML zones from Australian suburbs and postcodes, right in the browser. No 
   - **Combined outline** – one zone that outlines all of its suburbs/postcodes together (holes are kept if you skip an area in the middle).
   - **Each area as its own zone** – a separate zone for every suburb/postcode in it.
   - Or both.
+- **Set each zone's look:** outline colour and width, shading colour and shading opacity (0% for no shading).
+  Individual areas use the same colours with a thinner line and half the shading, so they sit under the combined outline.
 - **Download** all zones in one KML (a folder per zone, or a flat list), or download a single zone.
 - **Save / open projects** as a small `.zones.json` file. Your current work is also kept in the browser.
 - Suburbs and postcodes can be mixed in one zone, and zones can cross state borders.

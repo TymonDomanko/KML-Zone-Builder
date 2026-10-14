@@ -84,7 +84,17 @@ test('buildKml: folders, holes, multipolygons and escaping', () => {
   assert.ok(kml.includes('<Folder><name>North &amp; West &lt;A&gt; – areas</name>'));
   // 3 folders: zone 1, its areas, zone 2
   assert.strictEqual((kml.match(/<Folder>/g) || []).length, 3);
+  assert.ok(kml.includes('<Style id="zone0"><LineStyle><color>ff4b19e6</color><width>3</width></LineStyle><PolyStyle><color>404b19e6</color></PolyStyle></Style>'));
   const flat = KZB.buildKml(zones, { folders: false });
   assert.strictEqual((flat.match(/<Folder>/g) || []).length, 0);
   assert.strictEqual((flat.match(/<Placemark>/g) || []).length, 4);
+});
+
+test('buildKml: custom outline, shading colour, opacity and width', () => {
+  const geom = { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 0]]] };
+  const kml = KZB.buildKml([{ name: 'A', color: '#ff0000', fill: '#0000ff', fillOpacity: 0.5, width: 5, outline: geom, areas: [] }]);
+  assert.ok(kml.includes('<Style id="zone0"><LineStyle><color>ff0000ff</color><width>5</width></LineStyle><PolyStyle><color>80ff0000</color></PolyStyle></Style>'));
+  assert.ok(kml.includes('<Style id="zone0area"><LineStyle><color>e60000ff</color><width>2.5</width></LineStyle><PolyStyle><color>40ff0000</color></PolyStyle></Style>'));
+  const none = KZB.buildKml([{ name: 'A', color: '#ff0000', fillOpacity: 0, outline: geom, areas: [] }]);
+  assert.ok(none.includes('<PolyStyle><fill>0</fill></PolyStyle>'));
 });
