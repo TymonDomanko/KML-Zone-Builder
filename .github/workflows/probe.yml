@@ -6,24 +6,24 @@ jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
-      - name: ca-fsa
+      - name: ca-fsa-plain
         if: always()
-        run: curl -fsSL -A "Mozilla/5.0 (X11; Linux x86_64) Chrome/126.0" -r 0-2000 -o /tmp/a "https://www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lfsa000b21a_e.zip" && head -c 2 /tmp/a | grep -q PK
-      - name: ca-csd
+        run: curl -fsSL -o /tmp/a "https://www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lfsa000b21a_e.zip" && head -c 2 /tmp/a | grep -q PK
+      - name: ca-fsa-browser-headers
         if: always()
-        run: curl -fsSL -A "Mozilla/5.0 (X11; Linux x86_64) Chrome/126.0" -r 0-2000 -o /tmp/a "https://www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lcsd000b21a_e.zip" && head -c 2 /tmp/a | grep -q PK
-      - name: ca-arcgis
+        run: curl -fsSL -o /tmp/a -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36" -H "Accept: */*" -H "Accept-Language: en" "https://www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lfsa000b21a_e.zip" && head -c 2 /tmp/a | grep -q PK
+      - name: ca-status-403
         if: always()
-        run: curl -fsSL "https://geo.statcan.gc.ca/geo_wa/rest/services/2021/Cartographic_boundary_files/MapServer/14?f=pjson" | grep -q CFSAUID
-      - name: us-zcta
+        run: test "$(curl -s -o /dev/null -w '%{http_code}' https://www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lfsa000b21a_e.zip)" = 403
+      - name: ca-arcgis-query
         if: always()
-        run: curl -fsSL -r 0-2000 -o /tmp/a "https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_zcta520_500k.zip" && head -c 2 /tmp/a | grep -q PK
-      - name: us-place
+        run: curl -fsSL "https://geo.statcan.gc.ca/geo_wa/rest/services/2021/Cartographic_boundary_files/MapServer/14/query?where=1%3D1&outFields=*&resultRecordCount=2&f=geojson" | grep -q Feature
+      - name: ca-open-data-api
         if: always()
-        run: curl -fsSL -r 0-2000 -o /tmp/a "https://www2.census.gov/geo/tiger/GENZ2025/shp/cb_2025_us_place_500k.zip" && head -c 2 /tmp/a | grep -q PK
-      - name: nz-linz
+        run: curl -fsSL "https://open.canada.ca/data/api/action/package_search?q=forward%20sortation%20area%202021%20boundary" | grep -q '"success": true'
+      - name: nl-has-shp
         if: always()
-        run: curl -fsSL "https://services.arcgis.com/xdsHIIxuCWByZiCB/ArcGIS/rest/services/LINZ_NZ_Suburbs_and_Localities/FeatureServer/0/query?where=1%3D1&outFields=name&resultRecordCount=2&f=geojson" | grep -q FeatureCollection
-      - name: nl-cbs-pc4
+        run: curl -fsSL -A "Mozilla/5.0" -o /tmp/nl.zip "https://download.cbs.nl/postcode/2024-cbs_pc4_2023_v1.zip" && unzip -l /tmp/nl.zip | grep -qi '\.shp'
+      - name: nl-has-gpkg
         if: always()
-        run: curl -fsSL -A "Mozilla/5.0" -r 0-2000 -o /tmp/a "https://download.cbs.nl/postcode/2024-cbs_pc4_2023_v1.zip" && head -c 2 /tmp/a | grep -q PK
+        run: unzip -l /tmp/nl.zip | grep -qi '\.gpkg'
