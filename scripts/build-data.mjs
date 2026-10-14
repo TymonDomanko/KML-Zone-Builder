@@ -284,12 +284,25 @@ function dbfFields(shpPath) {
 }
 // Field names from the first feature of a GeoJSON file.
 function geojsonFields(file) {
+  // The first feature's geometry can be megabytes long, so read on until its properties turn up.
   const fd = fs.openSync(file, 'r');
-  const buf = Buffer.alloc(200000);
-  const n = fs.readSync(fd, buf, 0, buf.length, 0);
-  fs.closeSync(fd);
-  const m = buf.toString('utf8', 0, n).match(/"properties"\s*:\s*(\{[^{}]*\})/);
-  return m ? Object.keys(JSON.parse(m[1])) : [];
+  const CHUNK = 1 << 20;
+  let text = '';
+  let pos = 0;
+  try {
+    for (;;) {
+      const buf = Buffer.alloc(CHUNK);
+      const n = fs.readSync(fd, buf, 0, CHUNK, pos);
+      if (!n) return [];
+      pos += n;
+      text += buf.toString('utf8', 0, n);
+      const m = text.match(/"properties"\s*:\s*(\{[^{}]*\})/);
+      if (m) return Object.keys(JSON.parse(m[1]));
+      if (text.length > 200 * CHUNK) return [];
+    }
+  } finally {
+    fs.closeSync(fd);
+  }
 }
 
 function pick(fields, re, what) {
