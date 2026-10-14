@@ -7,6 +7,8 @@
   const DS_LABEL = { sal: 'Suburb', poa: 'Postcode', osm: 'OpenStreetMap' };
   const OVERPASS = [
     'https://overpass-api.de/api/interpreter',
+    'https://lambert.openstreetmap.de/api/interpreter',
+    'https://gall.openstreetmap.de/api/interpreter',
     'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
     'https://overpass.private.coffee/api/interpreter',
     'https://overpass.kumi.systems/api/interpreter',
@@ -607,26 +609,57 @@
     $('#osmStatus').textContent = text;
   }
 
-  // Overpass servers are run by volunteers and get busy, so try a few.
-  async function overpass(query) {
-    let last = null;
-    for (const ep of OVERPASS) {
-      const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 60000);
-      try {
-        const r = await fetch(ep, { method: 'POST', body: 'data=' + encodeURIComponent(query), signal: ac.signal });
-        if (!r.ok) {
-          last = `${new URL(ep).host} answered ${r.status}`;
-          continue;
+  // Overpass servers are run by volunteers and are often busy. Ask one; if it fails or hasn't answered
+  // within a few seconds, also ask the next. The first good answer wins and the rest are cancelled.
+  let overpassFirst = 0; // start with whichever server answered last time
+  function overpass(query, { stagger = 8000, timeout = 90000 } = {}) {
+    return new Promise((resolve, reject) => {
+      const order = OVERPASS.map((_, i) => OVERPASS[(overpassFirst + i) % OVERPASS.length]);
+      const controllers = [];
+      const errors = [];
+      let next = 0;
+      let running = 0;
+      let done = false;
+      let staggerTimer;
+      const finish = (fn, v) => {
+        if (done) return;
+        done = true;
+        clearTimeout(staggerTimer);
+        clearTimeout(overall);
+        controllers.forEach((c) => c.abort());
+        fn(v);
+      };
+      const overall = setTimeout(
+        () => finish(reject, new Error('OpenStreetMap boundary servers are busy right now — try again in a minute, or zoom in to a smaller area.')),
+        timeout
+      );
+      const launch = () => {
+        clearTimeout(staggerTimer);
+        if (done || next >= order.length) {
+          if (!done && running === 0) finish(reject, new Error(`OpenStreetMap boundary servers are busy right now — try again in a minute. (${errors.join('; ')})`));
+          return;
         }
-        return await r.json();
-      } catch (e) {
-        last = `${new URL(ep).host}: ${e.name === 'AbortError' ? 'timed out' : e.message}`;
-      } finally {
-        clearTimeout(timer);
-      }
-    }
-    throw new Error(`OpenStreetMap boundary servers are busy right now — try again in a minute (${last}).`);
+        const ep = order[next++];
+        const ac = new AbortController();
+        controllers.push(ac);
+        running++;
+        fetch(ep, { method: 'POST', body: 'data=' + encodeURIComponent(query), signal: ac.signal })
+          .then(async (r) => {
+            if (!r.ok) throw new Error(`${r.status}`);
+            const json = await r.json();
+            overpassFirst = OVERPASS.indexOf(ep);
+            finish(resolve, json);
+          })
+          .catch((e) => {
+            if (done) return;
+            errors.push(`${new URL(ep).host} ${e.name === 'AbortError' ? 'cancelled' : e.message}`);
+            running--;
+            launch(); // failed fast: try the next one now
+          });
+        staggerTimer = setTimeout(launch, stagger);
+      };
+      launch();
+    });
   }
 
   // Nominatim allows one request a second.
