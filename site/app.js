@@ -36,6 +36,7 @@
     country: 'AU', // countries in data/index.json use official data; anything else uses OpenStreetMap
     osm: {}, // OSM areas used in zones: id -> { name, kind, detail, geom }
     osmKind: null,
+    drawMode: 'add', // new shapes add to the zone, or cut out of it
     settings: { fileName: 'zones', folders: true, stripState: true },
   };
   let index = null; // data/index.json
@@ -104,6 +105,28 @@
   let areaLayer = null; // L.GeoJSON of the boundaries being shown
   const layerByCode = new Map();
   const outlineLayer = L.layerGroup().addTo(map);
+  const shapeLayer = L.featureGroup().addTo(map); // editable shapes of the selected zone
+
+  // Drawing tools (Leaflet-Geoman). Opt-in, so only our shape layers are editable.
+  if (L.PM) {
+    L.PM.setOptIn(true);
+    map.pm.setGlobalOptions({ snappable: true, snapDistance: 15, allowSelfIntersection: false, pmIgnore: false, snapIgnore: false });
+    map.pm.addControls({
+      position: 'topleft',
+      drawMarker: false,
+      drawCircleMarker: false,
+      drawPolyline: false,
+      drawText: false,
+      cutPolygon: false,
+      drawPolygon: true,
+      drawRectangle: true,
+      drawCircle: true,
+      editMode: true,
+      dragMode: true,
+      rotateMode: true,
+      removalMode: true,
+    });
+  }
   window.KZBApp = { map, state, layers: () => ({ areaLayer, outlineLayer }) }; // handy for debugging
 
   // ---------- data ----------
@@ -158,7 +181,36 @@
   // Combined outline of a zone. Areas from the same file are merged on their shared topology,
   // so neighbouring areas join without slivers. Different files (state borders, or suburbs mixed
   // with postcodes) are then unioned geometrically.
+  // A drawn shape as GeoJSON (circles are stored as centre + radius).
+  function shapeGeom(shape) {
+    if (shape.kind === 'circle') {
+      return turf.circle([shape.center[1], shape.center[0]], shape.radius / 1000, { steps: 96, units: 'kilometers' }).geometry;
+    }
+    return shape.geom;
+  }
+  const featureOf = (g) => turf.feature(g);
+
+  // Combined outline: suburbs/postcodes + "add" shapes, minus "cut out" shapes, grown or shrunk by zone.buffer metres.
   async function zoneOutline(zone) {
+    let g = await areasOutline(zone);
+    const shapes = zone.shapes || [];
+    const adds = shapes.filter((sh) => sh.mode !== 'cut').map(shapeGeom).filter(Boolean);
+    const cuts = shapes.filter((sh) => sh.mode === 'cut').map(shapeGeom).filter(Boolean);
+    if (adds.length) {
+      const parts = (g ? [g] : []).concat(adds);
+      g = parts.length === 1 ? parts[0] : turf.union(turf.featureCollection(parts.map(featureOf)))?.geometry || null;
+    }
+    for (const cut of cuts) {
+      if (!g) break;
+      g = turf.difference(turf.featureCollection([featureOf(g), featureOf(cut)]))?.geometry || null;
+    }
+    if (g && zone.buffer) {
+      g = turf.buffer(featureOf(g), zone.buffer / 1000, { units: 'kilometers', steps: 16 })?.geometry || null;
+    }
+    return g;
+  }
+
+  async function areasOutline(zone) {
     const groups = new Map();
     const osmParts = [];
     for (const item of itemsOf(zone)) {
@@ -207,6 +259,8 @@
       fillOpacity: 0.25,
       width: 3,
       items: [],
+      shapes: [],
+      buffer: 0,
       outline: true,
       individual: true,
     };
@@ -244,6 +298,7 @@
     save();
     renderZones();
     restyleAreas();
+    renderShapes();
     refreshOutlines();
   }
 
@@ -281,6 +336,8 @@
         items: z.items.filter((id) => typeof id === 'string' && (!id.startsWith('osm:') || state.osm[id])),
         outline: z.outline !== false,
         individual: z.individual !== false,
+        shapes: (Array.isArray(z.shapes) ? z.shapes : []).filter(validShape),
+        buffer: Number.isFinite(z.buffer) ? Math.max(-5000, Math.min(50000, z.buffer)) : 0,
       }));
     state.activeId = state.zones.some((z) => z.id === p.activeId) ? p.activeId : state.zones[0]?.id || null;
     if (p.settings) Object.assign(state.settings, p.settings);
@@ -288,6 +345,14 @@
     if (p.region && index.datasets[state.ds].regions[p.region]) state.region = p.region;
     if (p.country && COUNTRY_CODES.includes(p.country)) state.country = p.country;
     if (p.osmKind) state.osmKind = p.osmKind;
+  }
+  function validShape(sh) {
+    if (!sh || typeof sh !== 'object') return false;
+    sh.id = String(sh.id || Math.random().toString(36).slice(2, 10));
+    sh.name = String(sh.name || 'Shape');
+    sh.mode = sh.mode === 'cut' ? 'cut' : 'add';
+    if (sh.kind === 'circle') return Array.isArray(sh.center) && Number.isFinite(sh.center[0]) && Number.isFinite(sh.center[1]) && sh.radius > 0;
+    return !!(sh.geom && /^(Multi)?Polygon$/.test(sh.geom.type));
   }
   function restore() {
     try {
@@ -330,6 +395,8 @@
       { type: 'FeatureCollection', features: [...data.features.values()] },
       {
         renderer,
+        pmIgnore: true,
+        snapIgnore: true,
         style: styleFor,
         onEachFeature: (feature, layer) => {
           layerByCode.set(feature.properties.code, layer);
@@ -347,7 +414,12 @@
     }
   }
 
+  function toolActive() {
+    const pm = map.pm;
+    return !!(pm && (pm.globalDrawModeEnabled() || pm.globalEditModeEnabled() || pm.globalDragModeEnabled() || pm.globalRemovalModeEnabled() || pm.globalRotateModeEnabled?.()));
+  }
   function toggleArea(id) {
+    if (toolActive()) return;
     const zone = ensureActive();
     const i = zone.items.indexOf(id);
     if (id.startsWith('osm:') && !state.osm[id]) {
@@ -385,6 +457,8 @@
           L.geoJSON(g, {
             renderer,
             interactive: false,
+            pmIgnore: true,
+            snapIgnore: true,
             style: {
               color: z.color,
               weight: active ? z.width + 1 : z.width,
@@ -529,7 +603,7 @@
           changed();
         },
       }),
-      el('span', { class: 'count' }, `${items.length} ${items.length === 1 ? 'area' : 'areas'}`),
+      el('span', { class: 'count' }, zoneCountText(z, items)),
       el('button', { class: 'icon', type: 'button', title: 'Zoom to zone', onclick: () => zoomToZone(z) }, '⌖'),
       el('button', {
         class: 'icon',
@@ -540,6 +614,8 @@
           copy.items = [...z.items];
           copy.outline = z.outline;
           copy.individual = z.individual;
+          copy.shapes = JSON.parse(JSON.stringify(z.shapes)).map((sh) => ({ ...sh, id: Math.random().toString(36).slice(2, 10) }));
+          copy.buffer = z.buffer;
           Object.assign(copy, { color: z.color, fill: z.fill, fillOpacity: z.fillOpacity, width: z.width });
           changed();
         },
@@ -549,7 +625,7 @@
         type: 'button',
         title: 'Delete zone',
         onclick: () => {
-          if (z.items.length && !confirm(`Delete “${z.name}”?`)) return;
+          if ((z.items.length || z.shapes.length) && !confirm(`Delete “${z.name}”?`)) return;
           state.zones = state.zones.filter((x) => x !== z);
           if (state.activeId === z.id) state.activeId = state.zones[0]?.id || null;
           changed();
@@ -584,7 +660,8 @@
         );
       }
       if (items.length) body.append(chips);
-      else body.append(el('p', { class: 'hint' }, 'Click areas on the map, search above, or paste a list.'));
+      else body.append(el('p', { class: 'hint' }, 'Click areas on the map, search above, paste a list, or draw shapes.'));
+      body.append(shapesPanel(z));
 
       const msg = el('div', { class: 'msg' });
       msg.innerHTML = keep.pasteMsg;
@@ -612,6 +689,225 @@
     );
     card.append(body);
     return card;
+  }
+
+  // ---------- drawn shapes ----------
+  const SHAPE_KIND = { polygon: 'Polygon', rectangle: 'Rectangle', circle: 'Circle', imported: 'Imported shape' };
+  const SHAPE_ICON = { polygon: '⬠', rectangle: '▭', circle: '◯', imported: '⇪' };
+  const shapeKindLabel = (sh) => SHAPE_KIND[sh.kind] || 'Shape';
+  const newId = () => Math.random().toString(36).slice(2, 10);
+  function zoneCountText(z, items) {
+    const parts = [];
+    if (items.length || !z.shapes.length) parts.push(`${items.length} ${items.length === 1 ? 'area' : 'areas'}`);
+    if (z.shapes.length) parts.push(`${z.shapes.length} ${z.shapes.length === 1 ? 'shape' : 'shapes'}`);
+    return parts.join(' · ');
+  }
+  const toLatLngs = (rings) => rings.map((r) => r.map(([x, y]) => [y, x]));
+
+  let shapeSig = null;
+  function renderShapes(force) {
+    const z = activeZone();
+    const sig = z ? JSON.stringify([z.id, z.color, z.shapes.map((sh) => [sh.id, sh.mode, sh.kind === 'circle' ? [sh.center, sh.radius] : 0])]) : '';
+    if (!force && sig === shapeSig) return;
+    shapeSig = sig;
+    shapeLayer.clearLayers();
+    if (!z) return;
+    for (const sh of z.shapes) {
+      const color = sh.mode === 'cut' ? '#c62828' : z.color;
+      const opts = { color, weight: 2, dashArray: '6 4', fillColor: color, fillOpacity: sh.mode === 'cut' ? 0.12 : 0.06, pmIgnore: false };
+      let layer;
+      if (sh.kind === 'circle') layer = L.circle(sh.center, { ...opts, radius: sh.radius });
+      else if (sh.geom.type === 'Polygon') layer = L.polygon(toLatLngs(sh.geom.coordinates), opts);
+      else layer = L.polygon(sh.geom.coordinates.map(toLatLngs), opts);
+      layer.bindTooltip(`${sh.name}${sh.mode === 'cut' ? ' (cut out)' : ''}`, { sticky: true });
+      const update = () => {
+        if (sh.kind === 'circle') {
+          const c = layer.getLatLng();
+          sh.center = [+c.lat.toFixed(6), +c.lng.toFixed(6)];
+          sh.radius = Math.round(layer.getRadius());
+        } else {
+          sh.geom = KZB.roundGeom(layer.toGeoJSON().geometry);
+        }
+        shapeSig = JSON.stringify([z.id, z.color, z.shapes.map((x) => [x.id, x.mode, x.kind === 'circle' ? [x.center, x.radius] : 0])]);
+        save();
+        renderZones();
+        refreshOutlines();
+      };
+      layer.on('pm:edit pm:dragend pm:rotateend', update);
+      layer.on('pm:remove', () => {
+        z.shapes = z.shapes.filter((x) => x !== sh);
+        changed();
+      });
+      shapeLayer.addLayer(layer);
+    }
+  }
+
+  function onShapeDrawn(e) {
+    const zone = ensureActive();
+    const kind = e.shape === 'Circle' ? 'circle' : e.shape === 'Rectangle' ? 'rectangle' : 'polygon';
+    const n = zone.shapes.filter((x) => x.kind === kind).length + 1;
+    const sh = { id: newId(), kind, mode: state.drawMode, name: `${SHAPE_KIND[kind]} ${n}` };
+    if (kind === 'circle') {
+      const c = e.layer.getLatLng();
+      sh.center = [+c.lat.toFixed(6), +c.lng.toFixed(6)];
+      sh.radius = Math.round(e.layer.getRadius());
+    } else {
+      sh.geom = KZB.roundGeom(e.layer.toGeoJSON().geometry);
+    }
+    map.removeLayer(e.layer);
+    zone.shapes.push(sh);
+    changed();
+    toast(`${sh.name} ${sh.mode === 'cut' ? 'will be cut out of' : 'added to'} ${zone.name}`, 2000);
+  }
+
+  function startDraw(kind) {
+    if (!map.pm) return toast('Drawing tools are still loading');
+    ensureActive();
+    map.pm.disableGlobalEditMode?.();
+    map.pm.enableDraw(kind, { pathOptions: { color: state.drawMode === 'cut' ? '#c62828' : activeZone().color } });
+    toast(
+      kind === 'Polygon'
+        ? 'Click to add corners; click the first point (or Finish) to close it'
+        : kind === 'Rectangle'
+          ? 'Click one corner, then the opposite corner'
+          : 'Click the centre, then click again at the edge — you can type the exact radius afterwards',
+      4000
+    );
+  }
+
+  // Loads JSZip only when a .kmz is opened.
+  let jszip;
+  function loadJSZip() {
+    if (!jszip) {
+      jszip = new Promise((resolve, reject) => {
+        const sc = document.createElement('script');
+        sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+        sc.onload = () => resolve(window.JSZip);
+        sc.onerror = () => reject(new Error('Could not load the KMZ reader'));
+        document.head.append(sc);
+      });
+    }
+    return jszip;
+  }
+  async function readKmlFile(file) {
+    if (/\.kmz$/i.test(file.name)) {
+      const JSZip = await loadJSZip();
+      const zip = await JSZip.loadAsync(file);
+      const entry = Object.values(zip.files).find((f) => /\.kml$/i.test(f.name));
+      if (!entry) throw new Error('No KML inside that KMZ');
+      return entry.async('string');
+    }
+    return file.text();
+  }
+
+  async function importKml(file, zone) {
+    try {
+      const found = KZB.parseKmlPolygons(await readKmlFile(file));
+      if (!found.length) return toast(`No polygons found in ${file.name}`, 3000);
+      let target = zone;
+      if (found.length > 1 && confirm(`${file.name} has ${found.length} shapes.\n\nOK: make each one its own zone\nCancel: put them all in “${zone.name}”`)) {
+        target = null;
+      }
+      for (const f of found) {
+        const z = target || newZone(f.name);
+        z.shapes.push({ id: newId(), kind: 'imported', mode: 'add', name: f.name, geom: f.geom });
+      }
+      if (target) state.activeId = target.id;
+      changed();
+      const all = L.featureGroup(found.map((f) => L.geoJSON(f.geom)));
+      map.fitBounds(all.getBounds(), { padding: [30, 30] });
+      toast(`Imported ${found.length} shape${found.length === 1 ? '' : 's'} from ${file.name}`, 2500);
+    } catch (e) {
+      toast(`Could not import ${file.name}: ${e.message}`, 5000);
+    }
+  }
+
+  function shapesPanel(z) {
+    const wrap = el('div', { class: 'shapes' });
+    const mode = el(
+      'div',
+      { class: 'seg small', role: 'group', 'aria-label': 'What new shapes do' },
+      ...[['add', 'Add'], ['cut', 'Cut out']].map(([m, label]) =>
+        el('button', { type: 'button', class: state.drawMode === m ? 'on' : '', onclick: () => { state.drawMode = m; renderZones(); } }, label)
+      )
+    );
+    const file = el('input', {
+      type: 'file',
+      accept: '.kml,.kmz,application/vnd.google-earth.kml+xml,application/vnd.google-earth.kmz',
+      hidden: true,
+      onchange: (e) => {
+        const f = e.target.files[0];
+        e.target.value = '';
+        if (f) importKml(f, z);
+      },
+    });
+    wrap.append(
+      el('div', { class: 'shapes-head' }, el('span', { class: 'lbl' }, 'Draw'), mode),
+      el(
+        'div',
+        { class: 'tools' },
+        el('button', { type: 'button', class: 'btn small', title: 'Draw a polygon', onclick: () => startDraw('Polygon') }, '⬠ Polygon'),
+        el('button', { type: 'button', class: 'btn small', title: 'Draw a rectangle', onclick: () => startDraw('Rectangle') }, '▭ Rectangle'),
+        el('button', { type: 'button', class: 'btn small', title: 'Draw a circle', onclick: () => startDraw('Circle') }, '◯ Circle'),
+        el('label', { class: 'btn small', title: 'Import polygons from a KML or KMZ file' }, '⇪ Import KML', file)
+      )
+    );
+    for (const sh of z.shapes) {
+      const row = el(
+        'div',
+        { class: 'shape' + (sh.mode === 'cut' ? ' cut' : '') },
+        el('span', { class: 'ico', title: shapeKindLabel(sh) }, SHAPE_ICON[sh.kind] || '⬠'),
+        el('input', { class: 'sname', type: 'text', value: sh.name, 'aria-label': 'Shape name', onchange: (e) => { sh.name = e.target.value.trim() || sh.name; changed(); } }),
+        sh.kind === 'circle'
+          ? el(
+              'label',
+              { class: 'radius', title: 'Radius' },
+              el('input', {
+                type: 'number',
+                min: 0.01,
+                step: 0.1,
+                value: +(sh.radius / 1000).toFixed(3),
+                onchange: (e) => {
+                  const km = Number(e.target.value);
+                  if (km > 0) {
+                    sh.radius = Math.round(km * 1000);
+                    changed();
+                  }
+                },
+              }),
+              'km'
+            )
+          : null,
+        el(
+          'select',
+          { title: 'Add to the zone or cut out of it', onchange: (e) => { sh.mode = e.target.value; changed(); } },
+          el('option', { value: 'add', selected: sh.mode !== 'cut' }, 'Add'),
+          el('option', { value: 'cut', selected: sh.mode === 'cut' }, 'Cut out')
+        ),
+        el('button', { class: 'icon', type: 'button', title: 'Zoom to shape', onclick: () => map.fitBounds(L.geoJSON(shapeGeom(sh)).getBounds(), { padding: [40, 40] }) }, '⌖'),
+        el('button', { class: 'icon', type: 'button', title: 'Delete shape', onclick: () => { z.shapes = z.shapes.filter((x) => x !== sh); changed(); } }, '✕')
+      );
+      wrap.append(row);
+    }
+    if (z.shapes.length) wrap.append(el('p', { class: 'hint' }, 'Use the map toolbar to move, reshape, rotate or delete shapes.'));
+    wrap.append(
+      el(
+        'label',
+        { class: 'grow', title: 'Push the combined outline out (or pull it in with a negative number)' },
+        'Grow outline by',
+        el('input', {
+          type: 'number',
+          step: 10,
+          value: z.buffer || 0,
+          onchange: (e) => {
+            z.buffer = Math.max(-5000, Math.min(50000, Math.round(Number(e.target.value) || 0)));
+            changed();
+          },
+        }),
+        'm'
+      )
+    );
+    return wrap;
   }
 
   // Outline colour + width, shading colour + opacity. Live preview while dragging, saved on release.
@@ -858,6 +1154,8 @@
       { type: 'FeatureCollection', features },
       {
         renderer,
+        pmIgnore: true,
+        snapIgnore: true,
         style: styleFor,
         onEachFeature: (feature, layer) => {
           layer.bindTooltip(feature.properties.name, { sticky: true, direction: 'top', offset: [0, -6] });
@@ -1043,7 +1341,7 @@
   }
 
   async function downloadKml(zones, fileName) {
-    const usable = zones.filter((z) => z.items.length && (z.outline || z.individual));
+    const usable = zones.filter((z) => (z.items.length || z.shapes.some((sh) => sh.mode !== 'cut')) && (z.outline || z.individual));
     if (!usable.length) return toast('Nothing to download — add areas to a zone first');
     try {
       const out = [];
@@ -1057,7 +1355,12 @@
             const geom = await areaGeometry(item);
             if (geom) areas.push({ name: itemLabel(item, true), geom, description: `${dsLabel(item.ds)} · ${z.name}` });
           }
+          for (const sh of z.shapes.filter((x) => x.mode !== 'cut')) {
+            areas.push({ name: sh.name, geom: shapeGeom(sh), description: `${shapeKindLabel(sh)} · ${z.name}` });
+          }
         }
+        names.push(...z.shapes.map((sh) => (sh.mode === 'cut' ? `minus ${sh.name}` : sh.name)));
+        if (z.buffer) names.push(`${z.buffer > 0 ? 'grown' : 'shrunk'} by ${Math.abs(z.buffer)} m`);
         out.push({ name: z.name, color: z.color, fill: z.fill, fillOpacity: z.fillOpacity, width: z.width, outline, areas, description: names.join(', ') });
       }
       const name = safeFileName(fileName);
@@ -1132,6 +1435,7 @@
       }
     });
     setupSearch();
+    map.on('pm:create', onShapeDrawn);
   }
 
   async function start() {
@@ -1152,7 +1456,7 @@
     syncControls();
     wire();
     changed();
-    if (hasOfficial()) await showRegion(!state.zones.some((z) => z.items.length));
+    if (hasOfficial()) await showRegion(!state.zones.some((z) => z.items.length || z.shapes.length));
     if (activeZone() && activeZone().items.length) zoomToZone(activeZone());
     else if (!hasOfficial()) setCountry(state.country);
   }

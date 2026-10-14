@@ -342,8 +342,56 @@
     return polys.length === 1 ? { type: 'Polygon', coordinates: polys[0] } : { type: 'MultiPolygon', coordinates: polys };
   }
 
+  // ---------- KML import ----------
+  function unescXml(s) {
+    return s
+      .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&apos;/g, "'")
+      .replace(/&amp;/g, '&')
+      .trim();
+  }
+  function parseCoords(text) {
+    const pts = text
+      .trim()
+      .split(/\s+/)
+      .map((t) => t.split(',').map(Number))
+      .filter((p) => p.length >= 2 && Number.isFinite(p[0]) && Number.isFinite(p[1]))
+      .map((p) => [r6(p[0]), r6(p[1])]);
+    if (pts.length && (pts[0][0] !== pts[pts.length - 1][0] || pts[0][1] !== pts[pts.length - 1][1])) pts.push(pts[0].slice());
+    return pts;
+  }
+  const strip = (s) => s.replace(/<(\w+:)?/g, '<').replace(/<\/(\w+:)?/g, '</'); // drop namespace prefixes
+
+  // Pulls polygons out of KML text: one entry per Placemark that has at least one polygon.
+  // Returns [{ name, geom: Polygon|MultiPolygon }]. Points and lines are ignored.
+  function parseKmlPolygons(kmlText) {
+    const text = strip(kmlText);
+    const out = [];
+    const marks = text.match(/<Placemark[\s>][\s\S]*?<\/Placemark>/g) || [];
+    marks.forEach((pm, i) => {
+      const nm = pm.match(/<name>([\s\S]*?)<\/name>/);
+      const polys = [];
+      for (const poly of pm.match(/<Polygon[\s>][\s\S]*?<\/Polygon>/g) || []) {
+        const outer = poly.match(/<outerBoundaryIs>[\s\S]*?<coordinates>([\s\S]*?)<\/coordinates>/);
+        if (!outer) continue;
+        const rings = [parseCoords(outer[1])];
+        for (const m of poly.matchAll(/<innerBoundaryIs>[\s\S]*?<coordinates>([\s\S]*?)<\/coordinates>/g)) rings.push(parseCoords(m[1]));
+        if (rings[0].length >= 4) polys.push(rings.filter((r) => r.length >= 4));
+      }
+      if (!polys.length) return;
+      out.push({
+        name: nm ? unescXml(nm[1]) || `Shape ${i + 1}` : `Shape ${i + 1}`,
+        geom: polys.length === 1 ? { type: 'Polygon', coordinates: polys[0] } : { type: 'MultiPolygon', coordinates: polys },
+      });
+    });
+    return out;
+  }
+
   return {
     baseName, norm, createLookup, addDataset, buildLookup, postcodeCode, search, matchList, buildKml, kmlColor, geometryKml,
-    osmKind, osmKindLabel, osmName, summariseOsm, assembleRelation, roundGeom,
+    osmKind, osmKindLabel, osmName, summariseOsm, assembleRelation, roundGeom, parseKmlPolygons,
   };
 });

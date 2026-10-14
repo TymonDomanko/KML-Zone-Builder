@@ -14,6 +14,12 @@ New Zealand use official government boundaries; every other country uses OpenStr
   - **Combined outline** – one zone that outlines all of its suburbs/postcodes together (holes are kept if you skip an area in the middle).
   - **Each area as its own zone** – a separate zone for every suburb/postcode in it.
   - Or both.
+- **Draw your own shapes** into any zone – polygons, rectangles and circles (type an exact radius), or
+  **import polygons from a KML/KMZ** file. Each shape either **adds** to the zone or **cuts out** of it
+  (e.g. a suburb minus a park), and you can move, reshape, rotate or delete shapes with the map toolbar.
+  Shapes merge with the zone's suburbs/postcodes into the combined outline, and appear as their own zones
+  when "each area as its own zone" is ticked.
+- **Grow or shrink** a zone's combined outline by a set number of metres.
 - **Set each zone's look:** outline colour and width, shading colour and shading opacity (0% for no shading).
   Individual areas use the same colours with a thinner line and half the shading, so they sit under the combined outline.
 - **Download** all zones in one KML (a folder per zone, or a flat list), or download a single zone.

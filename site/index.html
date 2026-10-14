@@ -6,13 +6,14 @@
   <title>KML Zone Builder</title>
   <meta name="description" content="Build KML zones from suburbs and postcodes — official data for Australia, the US, Canada and New Zealand, OpenStreetMap elsewhere. No API keys.">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@geoman-io/leaflet-geoman-free@2.20.2/dist/leaflet-geoman.css">
   <link rel="stylesheet" href="style.css?v=dev">
 </head>
 <body>
   <aside id="panel">
     <header>
       <h1>KML Zone Builder</h1>
-      <p class="sub">Outline suburbs and postcodes, then download as KML.</p>
+      <p class="sub">Outline suburbs and postcodes, draw your own shapes, then download as KML.</p>
     </header>
 
     <section class="block">
@@ -37,7 +38,7 @@
         <input id="search" type="search" placeholder="Search suburb or postcode to add…" autocomplete="off">
         <ul id="results" hidden></ul>
       </div>
-      <p class="hint">Click areas on the map to add or remove them from the selected zone.</p>
+      <p class="hint">Click areas on the map to add or remove them from the selected zone. Draw shapes with the tools on the map or in the zone.</p>
     </section>
 
     <section class="block">
@@ -78,6 +79,7 @@
   <div id="toast" hidden></div>
 
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@geoman-io/leaflet-geoman-free@2.20.2/dist/leaflet-geoman.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.4.0/turf.min.js" defer></script>
   <script src="core.js?v=dev"></script>
