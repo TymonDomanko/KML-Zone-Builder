@@ -156,7 +156,8 @@ const COUNTRIES = {
         source: { arcgis: 'https://services.arcgis.com/xdsHIIxuCWByZiCB/ArcGIS/rest/services/LINZ_NZ_Suburbs_and_Localities/FeatureServer/0' },
         code: /^id$/,
         name: /^name$/,
-        region: { field: /^territorial_authority$/, other: 'Other' },
+        // some suburbs straddle councils ("Auckland, Waikato District"): file them under the first one
+        region: { field: /^territorial_authority$/, first: true, other: 'Other' },
       },
     },
   },
@@ -291,7 +292,9 @@ function labelExpr(spec, fields, codeF) {
   const other = sq(spec.other || 'Other');
   if (spec.codeDigit) return `(${sq(spec.map)})[String(${codeF}).slice(0, ${spec.codeDigit})]||${other}`;
   const f = pick(fields, spec.field, 'region');
-  return spec.map ? `(${sq(spec.map)})[String(${f})]||${other}` : `(${f} ? String(${f}) : ${other})`;
+  if (spec.map) return `(${sq(spec.map)})[String(${f})]||${other}`;
+  if (spec.first) return `(${f} ? String(${f}).split(',')[0].trim() : ${other})`;
+  return `(${f} ? String(${f}) : ${other})`;
 }
 
 async function buildDataset(country, key, ds) {
@@ -397,6 +400,7 @@ for (const [cc, c] of Object.entries(COUNTRIES)) {
       // One country's source being down shouldn't take the whole site down.
       console.error(`  FAILED ${cc} ${key}: ${e.message}`);
       failures.push(`${cc} ${key}`);
+      console.log(`::warning title=${cc} ${key} failed::${e.message.replace(/\n/g, ' ').slice(0, 900)}`);
     }
   }
   if (!dsKeys.length) continue;
