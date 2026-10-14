@@ -34,17 +34,21 @@ jobs:
 
       - run: npm test
 
-      - name: Cache ABS downloads
+      - name: Cache boundary downloads
         uses: actions/cache@v4
         with:
-          path: .cache/*.zip
-          key: abs-zips-${{ hashFiles('scripts/build-data.mjs', '.github/workflows/deploy.yml') }}
-          restore-keys: abs-zips-
+          path: |
+            .cache/*.zip
+            .cache/*.geojson
+          key: boundaries-v2-${{ hashFiles('scripts/build-data.mjs', '.github/workflows/deploy.yml') }}
+          restore-keys: boundaries-v2-
 
       - name: Build boundary data
+        timeout-minutes: 40
         run: |
           node scripts/build-data.mjs --out site/data
           du -sh site/data site/data/*
+          ls site/data/*/ | head -100
 
       - name: Cache-bust scripts and styles
         run: sed -i "s/?v=dev/?v=${GITHUB_SHA::7}/g" site/index.html

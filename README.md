@@ -1,7 +1,7 @@
 # KML Zone Builder
 
-Build KML zones from suburbs and postcodes, right in the browser. Australia uses official ABS boundaries;
-every other country uses OpenStreetMap. No API keys, no sign-up.
+Build KML zones from suburbs and postcodes, right in the browser. Australia, the United States, Canada and
+New Zealand use official government boundaries; every other country uses OpenStreetMap. No API keys, no sign-up.
 
 **Open it:** https://tymondomanko.github.io/KML-Zone-Builder/
 
@@ -27,6 +27,20 @@ The KML files work with Google Earth, Google My Maps and the other KML tools
 
 ## Where the boundaries come from
 
+### Official government data
+
+| Country | Areas | Postcodes | Source |
+|---|---|---|---|
+| Australia | Suburbs and localities | Postcodes (ABS Postal Areas) | Australian Bureau of Statistics, ASGS 2021 – CC BY 4.0 |
+| United States | Cities & towns (Census places) | ZIP codes (ZCTAs) | US Census Bureau cartographic boundary files – public domain |
+| Canada | Municipalities (census subdivisions) | Postal areas (first 3 characters, FSAs) | Statistics Canada 2021 Census – Open Government Licence – Canada |
+| New Zealand | Suburbs and localities | – (NZ Post postcode boundaries aren't open data) | LINZ NZ Suburbs and Localities – CC BY 4.0 |
+
+Postcode areas are statistical approximations built by each agency, so edges can differ a little from the
+postal service's own areas, and PO-box-only postcodes have no area. In pasted lists you can add a state or
+province, e.g. `Epping VIC`, `Springfield IL`, `Richmond BC`, and full Canadian postcodes (`M5V 3L9`) or
+ZIP+4 codes are cut down to the area they fall in.
+
 ### Other countries (OpenStreetMap)
 
 Pick a country at the top. Then either:
@@ -36,29 +50,23 @@ Pick a country at the top. Then either:
 - **search** or **paste a list** of places/postcodes (looked up with Nominatim).
 
 Coverage depends on what volunteers have mapped: e.g. Germany and the Netherlands have postcode outlines,
-the UK has council wards, but many suburbs worldwide are only mapped as a point, which can't be outlined.
-The tool tells you when something has no outline. Overpass servers are volunteer-run and sometimes busy –
-if loading fails, wait a minute and try again. Boundaries © OpenStreetMap contributors, ODbL.
+but many suburbs worldwide are only mapped as a point, which can't be outlined. The tool tells you when
+something has no outline. Overpass servers are volunteer-run and sometimes busy – if loading fails, wait a
+minute and try again. Boundaries © OpenStreetMap contributors, ODbL.
 
-### Australia (ABS)
-
-Australian Bureau of Statistics, Australian Statistical Geography Standard (ASGS) Edition 3, 2021:
-
-- **Suburbs and Localities (SAL)**
-- **Postal Areas (POA)** – the ABS's approximation of Australia Post postcodes. They are built from census
-  blocks, so edges can differ a little from Australia Post's own postcode areas, and PO-box-only postcodes have no area.
-
-© Australian Bureau of Statistics, licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
-Boundaries are simplified to about 10 m so the site loads quickly. Map tiles © OpenStreetMap contributors.
+Official boundaries are simplified to about 10 m so the site loads quickly. Map tiles © OpenStreetMap contributors.
 
 ## How it's built
 
 The site is static (`site/`) and hosted on GitHub Pages. The boundary data isn't stored in the repo – the
-**Build data and deploy** GitHub Action downloads the ABS files, simplifies them with
-[mapshaper](https://github.com/mbloch/mapshaper), splits them by state into TopoJSON, and publishes the site.
+**Build data and deploy** GitHub Action downloads the official files (or pages through the agencies' public
+ArcGIS services), simplifies them with
+[mapshaper](https://github.com/mbloch/mapshaper), splits them by state/province into TopoJSON, and publishes the site.
+If one country's source is down during a build, that country is left out of that build and the rest still deploy.
 It runs on every push to `main`, or manually from the Actions tab.
 
-Zones are merged on the shared boundaries in the TopoJSON, so neighbouring suburbs join cleanly with no slivers.
+Zones are merged on the shared boundaries in the TopoJSON, so neighbouring areas join cleanly with no slivers.
+To add another country, add an entry to `COUNTRIES` in `scripts/build-data.mjs`.
 
 To switch to newer ABS boundaries later (e.g. the 2026 edition once Suburbs and Postal Areas are released),
 put the new zip URLs in `SAL_URL` / `POA_URL` in `.github/workflows/deploy.yml`.
@@ -67,7 +75,8 @@ put the new zip URLs in `SAL_URL` / `POA_URL` in `.github/workflows/deploy.yml`.
 
 ```sh
 npm install
-npm run build:data   # downloads ~150 MB from the ABS, writes site/data/
+npm run build:data   # downloads ~300 MB of boundary files, writes site/data/
+node scripts/build-data.mjs --only sal,poa   # just one country's datasets
 npm run serve        # http://localhost:8080
 npm test
 ```

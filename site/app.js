@@ -4,7 +4,13 @@
 
   const COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#0aa5b5', '#d6249f', '#808000', '#9a6324', '#000075'];
   const STORE_KEY = 'kml-zone-builder:project';
-  const DS_LABEL = { sal: 'Suburb', poa: 'Postcode', osm: 'OpenStreetMap' };
+  const PASTE_EXAMPLES = {
+    AU: 'Epping, Carlingford, Beecroft\n2121\nEpping VIC',
+    US: 'Evanston, Skokie\n60601\nSpringfield IL',
+    CA: 'Toronto, Mississauga\nM5V\nRichmond BC',
+    NZ: 'Ponsonby, Grey Lynn\nRiverside',
+  };
+  const dsLabel = (ds) => (ds === 'osm' ? 'OpenStreetMap' : index.datasets[ds]?.label || ds);
   const OVERPASS = [
     'https://overpass-api.de/api/interpreter',
     'https://lambert.openstreetmap.de/api/interpreter',
@@ -24,17 +30,43 @@
     activeId: null,
     ds: 'sal',
     region: 'nsw_act',
-    country: 'AU', // AU uses the ABS data; anything else uses OpenStreetMap
+    country: 'AU', // countries in data/index.json use official data; anything else uses OpenStreetMap
     osm: {}, // OSM areas used in zones: id -> { name, kind, detail, geom }
     osmKind: null,
     settings: { fileName: 'zones', folders: true, stripState: true },
   };
   let index = null; // data/index.json
-  let lookup = null; // KZB.buildLookup(index)
+  const lookup = KZB.createLookup(); // filled per dataset as countries are opened
   const regionCache = new Map(); // "ds/region" -> Promise<{ topo, geoms: Map(code -> topo geometry), features: Map(code -> GeoJSON) }>
   let membership = new Map(); // item id -> [zone ids]
   const osmLoaded = new Map(); // OSM areas currently shown on the map: id -> GeoJSON feature
-  const isAU = () => state.country === 'AU';
+  // true when the current country has official (prebuilt) boundaries
+  const hasOfficial = () => !!(index && index.countries[state.country]);
+  const countryCfg = () => index.countries[state.country];
+  const regionLabel = (item) => index.datasets[item.ds]?.regions[item.region]?.label || item.region;
+  const countryOfDs = (ds) => index.datasets[ds]?.country;
+
+  // Loads the search items for these datasets (once each).
+  const itemLoads = new Map();
+  function ensureItems(dsList) {
+    return Promise.all(
+      [...new Set(dsList)]
+        .filter((ds) => index.datasets[ds])
+        .map((ds) => {
+          if (!itemLoads.has(ds)) {
+            const p = fetch(`data/${ds}/items.json`)
+              .then((r) => {
+                if (!r.ok) throw new Error(`Could not load ${ds} names`);
+                return r.json();
+              })
+              .then((items) => KZB.addDataset(lookup, ds, index.datasets[ds].kind, items));
+            p.catch(() => itemLoads.delete(ds));
+            itemLoads.set(ds, p);
+          }
+          return itemLoads.get(ds);
+        })
+    );
+  }
 
   // ---------- dom ----------
   const $ = (sel) => document.querySelector(sel);
@@ -76,7 +108,6 @@
     const res = await fetch('data/index.json');
     if (!res.ok) throw new Error('Boundary data not found (data/index.json). Has the data build run?');
     index = await res.json();
-    lookup = KZB.buildLookup(index);
     if (index.built) $('#built').textContent = ` Data built ${index.built.slice(0, 10)}.`;
   }
 
@@ -108,11 +139,17 @@
     }
     return lookup.byId.get(id) || null;
   }
+  // datasets referenced by items in any zone
+  function zoneDatasets() {
+    return [...new Set(state.zones.flatMap((z) => z.items.map((id) => id.split(':')[0])).filter((ds) => ds !== 'osm'))];
+  }
   function itemsOf(zone) {
     return zone.items.map(getItem).filter(Boolean);
   }
   function itemPlace(item) {
-    return item.ds === 'osm' ? item.detail || item.kind || '' : index.regions[item.region];
+    if (item.ds === 'osm') return item.detail || item.kind || '';
+    const cc = countryOfDs(item.ds);
+    return cc === state.country ? regionLabel(item) : `${regionLabel(item)}, ${index.countries[cc]?.name || cc}`;
   }
 
   // Combined outline of a zone. Areas from the same file are merged on their shared topology,
@@ -188,7 +225,7 @@
     return added;
   }
   function itemLabel(item, forExport) {
-    if (item.ds === 'poa') return item.code;
+    if (item.kind === 'postcode') return item.code;
     if (item.ds === 'osm') return item.name;
     return forExport && state.settings.stripState ? KZB.baseName(item.name) : item.name;
   }
@@ -283,7 +320,7 @@
     const ds = state.ds;
     const region = state.region;
     const data = await loadRegion(ds, region);
-    if (token !== showToken || !isAU()) return;
+    if (token !== showToken || !hasOfficial()) return;
     if (areaLayer) map.removeLayer(areaLayer);
     layerByCode.clear();
     areaLayer = L.geoJSON(
@@ -293,8 +330,7 @@
         style: styleFor,
         onEachFeature: (feature, layer) => {
           layerByCode.set(feature.properties.code, layer);
-          const item = lookup.byId.get(`${ds}:${feature.properties.code}`);
-          layer.bindTooltip(item ? item.name : feature.properties.name, { sticky: true, direction: 'top', offset: [0, -6] });
+          layer.bindTooltip(feature.properties.name, { sticky: true, direction: 'top', offset: [0, -6] });
           layer.on('mouseover', () => layer.setStyle({ weight: 3 }));
           layer.on('mouseout', () => layer.setStyle(styleFor(feature)));
           layer.on('click', () => toggleArea(`${ds}:${feature.properties.code}`));
@@ -378,11 +414,12 @@
       if (g) map.fitBounds(L.geoJSON(g).getBounds(), { padding: [60, 60], maxZoom: 15 });
       return;
     }
-    const switching = !isAU();
+    const cc = countryOfDs(item.ds);
+    const switching = cc !== state.country;
     if (switching) {
-      state.country = 'AU';
+      state.country = cc;
+      await ensureItems(countryCfg().datasets);
       save();
-      syncControls();
     }
     if (switching || item.ds !== state.ds || item.region !== state.region) {
       state.ds = item.ds;
@@ -397,16 +434,42 @@
   // ---------- sidebar ----------
   function syncControls() {
     $('#country').value = state.country;
-    $('#auControls').hidden = !isAU();
-    $('#osmControls').hidden = isAU();
-    $('#search').placeholder = isAU() ? 'Search suburb or postcode to add…' : 'Search a place or postcode to add…';
-    document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.ds === state.ds));
-    const sel = $('#region');
-    sel.replaceChildren(
-      ...Object.entries(index.datasets[state.ds].regions).map(([key, r]) =>
-        el('option', { value: key, selected: key === state.region }, `${index.regions[key]} (${r.count.toLocaleString()})`)
-      )
-    );
+    $('#auControls').hidden = !hasOfficial();
+    $('#osmControls').hidden = hasOfficial();
+    if (hasOfficial()) {
+      const cfg = countryCfg();
+      if (!cfg.datasets.includes(state.ds)) state.ds = cfg.datasets[0];
+      const regions = index.datasets[state.ds].regions;
+      if (!regions[state.region]) state.region = Object.keys(regions)[0];
+      const names = cfg.datasets.map((ds) => index.datasets[ds].label.toLowerCase());
+      $('#search').placeholder = `Search ${names.join(' or ')} to add…`;
+      $('#auControls .seg').replaceChildren(
+        ...cfg.datasets.map((ds) =>
+          el(
+            'button',
+            {
+              type: 'button',
+              class: ds === state.ds ? 'on' : '',
+              onclick: () => {
+                if (state.ds === ds) return;
+                state.ds = ds;
+                syncControls();
+                save();
+                showRegion(false);
+              },
+            },
+            index.datasets[ds].label
+          )
+        )
+      );
+      $('#region').replaceChildren(
+        ...Object.entries(regions).map(([key, r]) =>
+          el('option', { value: key, selected: key === state.region }, `${r.label} (${r.count.toLocaleString()})`)
+        )
+      );
+    } else {
+      $('#search').placeholder = 'Search a place or postcode to add…';
+    }
     $('#fileName').value = state.settings.fileName;
     $('#folders').checked = state.settings.folders;
     $('#stripState').checked = state.settings.stripState;
@@ -506,7 +569,7 @@
         chips.append(
           el(
             'span',
-            { class: 'chip', title: `${DS_LABEL[item.ds]} · ${itemPlace(item)}` },
+            { class: 'chip', title: `${dsLabel(item.ds)} · ${itemPlace(item)}` },
             el('a', { href: '#', style: 'color:inherit;text-decoration:none', onclick: (e) => { e.preventDefault(); goToItem(item); } }, item.name),
             others ? el('span', { class: 'also', title: `Also in ${others} other zone${others > 1 ? 's' : ''}` }, ` +${others}`) : null,
             el('button', { class: 'x', type: 'button', title: 'Remove', onclick: () => { z.items = z.items.filter((id) => id !== item.id); changed(); } }, '×')
@@ -519,9 +582,7 @@
       const msg = el('div', { class: 'msg' });
       msg.innerHTML = keep.pasteMsg;
       const ta = el('textarea', {
-        placeholder: isAU()
-          ? 'One per line or comma-separated, e.g.\nEpping, Carlingford, Beecroft\n2121\nEpping VIC'
-          : 'One per line or comma-separated, e.g.\nMitte, Moabit\n10115',
+        placeholder: 'One per line or comma-separated, e.g.\n' + (PASTE_EXAMPLES[state.country] || 'Mitte, Moabit\n10115'),
       });
       ta.value = keep.pasteText;
       const paste = el(
@@ -529,7 +590,7 @@
         { class: 'paste', open: keep.openPaste },
         el('summary', {}, 'Paste a list of suburbs or postcodes'),
         ta,
-        el('button', { type: 'button', class: 'btn small', onclick: (e) => (isAU() ? addPasted(z, ta, msg) : addPastedOsm(z, ta, msg, e.target)) }, 'Add to zone'),
+        el('button', { type: 'button', class: 'btn small', onclick: (e) => (hasOfficial() ? addPasted(z, ta, msg) : addPastedOsm(z, ta, msg, e.target)) }, 'Add to zone'),
         msg
       );
       body.append(paste);
@@ -576,7 +637,7 @@
   }
 
   function addPasted(zone, ta, msg) {
-    const res = KZB.matchList(lookup, ta.value, state.region);
+    const res = KZB.matchList(lookup, ta.value, state.region, countryCfg());
     const added = addItems(zone, res.matched);
     msg.replaceChildren();
     msg.append(`Added ${added} area${added === 1 ? '' : 's'}${res.matched.length > added ? ` (${res.matched.length - added} already in zone)` : ''}.`);
@@ -595,7 +656,7 @@
               e.target.disabled = true;
               changed();
             },
-          }, opt.name)
+          }, opt.ds === 'osm' ? opt.name : `${opt.name} (${regionLabel(opt)})`)
         );
       }
     }
@@ -771,7 +832,7 @@
         osmLoaded.set(f.properties.id, f);
         features.push(f);
       }
-      if (isAU()) return;
+      if (hasOfficial()) return;
       showOsmLayer(features);
       osmStatus(
         features.length
@@ -805,11 +866,16 @@
     state.country = code;
     save();
     syncControls();
+    $('#search').value = '';
     if (areaLayer) {
       map.removeLayer(areaLayer);
       areaLayer = null;
     }
-    if (isAU()) return showRegion(true);
+    if (hasOfficial()) {
+      await ensureItems(countryCfg().datasets);
+      syncControls();
+      return showRegion(true);
+    }
     osmLoaded.clear();
     $('#osmType').replaceChildren(el('option', {}, 'Press “Show boundaries here”'));
     $('#osmType').disabled = true;
@@ -913,7 +979,7 @@
             el(
               'span',
               { class: 'meta' },
-              item.ds === 'osm' ? (item.geom ? `${item.kind} · ${item.detail}` : 'no outline in OpenStreetMap') : `${DS_LABEL[item.ds]} · ${index.regions[item.region]}`
+              item.ds === 'osm' ? (item.geom ? `${item.kind} · ${item.detail}` : 'no outline in OpenStreetMap') : `${dsLabel(item.ds)} · ${regionLabel(item)}`
             )
           )
         )
@@ -924,8 +990,8 @@
     let token = 0;
     input.addEventListener('input', () => {
       clearTimeout(timer);
-      if (isAU()) {
-        results = KZB.search(lookup, input.value);
+      if (hasOfficial()) {
+        results = KZB.search(lookup, input.value, countryCfg());
         sel = 0;
         draw();
         return;
@@ -982,7 +1048,7 @@
         if (z.individual) {
           for (const item of items) {
             const geom = await areaGeometry(item);
-            if (geom) areas.push({ name: itemLabel(item, true), geom, description: `${DS_LABEL[item.ds]} · ${z.name}` });
+            if (geom) areas.push({ name: itemLabel(item, true), geom, description: `${dsLabel(item.ds)} · ${z.name}` });
           }
         }
         out.push({ name: z.name, color: z.color, fill: z.fill, fillOpacity: z.fillOpacity, width: z.width, outline, areas, description: names.join(', ') });
@@ -990,7 +1056,9 @@
       const name = safeFileName(fileName);
       const used = usable.flatMap(itemsOf);
       const credits = [];
-      if (used.some((i) => i.ds !== 'osm')) credits.push('Australian boundaries © Australian Bureau of Statistics, CC BY 4.0');
+      for (const cc of new Set(used.filter((i) => i.ds !== 'osm').map((i) => countryOfDs(i.ds)))) {
+        if (index.countries[cc]) credits.push(`${index.countries[cc].name} boundaries © ${index.countries[cc].credit}`);
+      }
       if (used.some((i) => i.ds === 'osm')) credits.push('Boundaries © OpenStreetMap contributors, ODbL');
       const kml = KZB.buildKml(out, { docName: name, folders: state.settings.folders, description: credits.join('. ') });
       download(`${name}.kml`, kml, 'application/vnd.google-earth.kml+xml');
@@ -1003,21 +1071,14 @@
 
   // ---------- wire up ----------
   function wire() {
-    document.querySelectorAll('.seg button').forEach((b) =>
-      b.addEventListener('click', () => {
-        if (state.ds === b.dataset.ds || !isAU()) return;
-        state.ds = b.dataset.ds;
-        if (!index.datasets[state.ds].regions[state.region]) state.region = Object.keys(index.datasets[state.ds].regions)[0];
-        syncControls();
-        save();
-        showRegion(false);
-      })
-    );
     const names = new Intl.DisplayNames(['en'], { type: 'region' });
     const countries = COUNTRY_CODES.map((c) => [c, names.of(c) || c]).sort((a, b) => a[1].localeCompare(b[1]));
+    const official = Object.entries(index.countries).sort((a, b) => a[1].name.localeCompare(b[1].name));
     $('#country').replaceChildren(
-      el('option', { value: 'AU' }, 'Australia (ABS suburbs & postcodes)'),
-      ...countries.filter(([c]) => c !== 'AU').map(([c, n]) => el('option', { value: c }, `${n} (OpenStreetMap)`))
+      el('optgroup', { label: 'Official boundaries' },
+        ...official.map(([c, info]) => el('option', { value: c }, `${info.name} (${info.datasets.map((ds) => index.datasets[ds].label.toLowerCase()).join(', ')})`))),
+      el('optgroup', { label: 'OpenStreetMap (coverage varies)' },
+        ...countries.filter(([c]) => !index.countries[c]).map(([c, n]) => el('option', { value: c }, n)))
     );
     $('#country').value = state.country;
     $('#country').addEventListener('change', (e) => setCountry(e.target.value));
@@ -1049,9 +1110,10 @@
       if (!file) return;
       try {
         applyProject(JSON.parse(await file.text()));
+        await ensureItems([...zoneDatasets(), ...(hasOfficial() ? countryCfg().datasets : [])]);
         syncControls();
         changed();
-        if (isAU()) await showRegion(false);
+        if (hasOfficial()) await showRegion(false);
         else if (areaLayer) {
           map.removeLayer(areaLayer);
           areaLayer = null;
@@ -1074,14 +1136,18 @@
       return;
     }
     restore();
-    if (!index.datasets[state.ds]) state.ds = Object.keys(index.datasets)[0];
-    if (!index.datasets[state.ds].regions[state.region]) state.region = Object.keys(index.datasets[state.ds].regions)[0];
+    if (!COUNTRY_CODES.includes(state.country)) state.country = 'AU';
+    try {
+      await ensureItems([...zoneDatasets(), ...(hasOfficial() ? countryCfg().datasets : [])]);
+    } catch (e) {
+      toast(e.message, 5000);
+    }
     syncControls();
     wire();
     changed();
-    if (isAU()) await showRegion(!state.zones.some((z) => z.items.length));
+    if (hasOfficial()) await showRegion(!state.zones.some((z) => z.items.length));
     if (activeZone() && activeZone().items.length) zoomToZone(activeZone());
-    else if (!isAU()) setCountry(state.country);
+    else if (!hasOfficial()) setCountry(state.country);
   }
 
   start();

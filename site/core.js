@@ -6,97 +6,128 @@
   else root.KZB = api;
 })(typeof self !== 'undefined' ? self : this, function () {
   // ---------- names ----------
-  // ABS suburb names carry a state suffix when the name exists in more than one state: "Epping (NSW)", "Epping (Vic.)".
+  // Some official names carry a region suffix when the name exists in more than one region:
+  // "Epping (NSW)", "Epping (Vic.)", "Ascot (Ballarat - Vic.)".
   const SUFFIX_RE = /\s*\(([^)]+)\)\s*$/;
-  const STATE_ABBR = {
-    nsw: 'nsw_act', act: 'nsw_act', vic: 'vic', qld: 'qld', sa: 'sa',
-    wa: 'wa', tas: 'tas', nt: 'nt',
-  };
   function baseName(name) {
     return name.replace(SUFFIX_RE, '');
   }
   function suffixState(name) {
     const m = name.match(SUFFIX_RE);
     if (!m) return null;
-    // "(NSW)", "(Vic.)", "(Ballarat - Vic.)" -> "nsw", "vic", "vic"
-    const st = m[1].replace(/\./g, '').trim().toLowerCase().match(/(nsw|act|vic|qld|sa|wa|tas|nt)$/);
+    const st = m[1].replace(/\./g, '').trim().toLowerCase().match(/([a-z]+)$/);
     return st ? st[1] : null;
   }
   function norm(s) {
-    return s.toLowerCase().replace(/[’'`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+    return s
+      .normalize('NFD')
+      .replace(/[̀-ͯ]/g, '')
+      .toLowerCase()
+      .replace(/[’'`]/g, '')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .trim();
   }
+  const escRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-  // ---------- index ----------
-  // Turns data/index.json into a lookup used by search and list matching.
-  function buildLookup(index) {
-    const byId = new Map();
-    const all = [];
-    const salByName = new Map(); // normalised base name -> [item]
-    for (const [ds, data] of Object.entries(index.datasets)) {
-      for (const [code, name, region] of data.items) {
-        const item = { id: `${ds}:${code}`, ds, code, name, region, key: norm(name), base: norm(baseName(name)) };
-        byId.set(item.id, item);
-        all.push(item);
-        if (ds === 'sal') {
-          if (!salByName.has(item.base)) salByName.set(item.base, []);
-          salByName.get(item.base).push(item);
-        }
+  // ---------- lookup ----------
+  // Items from data/<ds>/items.json, added dataset by dataset as countries are opened.
+  function createLookup() {
+    return { byId: new Map(), all: [], byName: new Map(), loaded: new Set() };
+  }
+  function addDataset(lookup, ds, kind, items) {
+    if (lookup.loaded.has(ds)) return;
+    lookup.loaded.add(ds);
+    for (const [code, name, region] of items) {
+      const item = { id: `${ds}:${code}`, ds, kind, code, name, region, key: norm(name), base: norm(baseName(name)) };
+      lookup.byId.set(item.id, item);
+      lookup.all.push(item);
+      if (kind !== 'postcode') {
+        if (!lookup.byName.has(item.base)) lookup.byName.set(item.base, []);
+        lookup.byName.get(item.base).push(item);
       }
     }
-    return { byId, all, salByName };
+  }
+  // Old style: { datasets: { ds: { kind?, items } } } in one go (used by tests).
+  function buildLookup(index) {
+    const lookup = createLookup();
+    for (const [ds, d] of Object.entries(index.datasets)) addDataset(lookup, ds, d.kind || (ds === 'poa' ? 'postcode' : 'area'), d.items);
+    return lookup;
   }
 
-  function search(lookup, query, limit = 12) {
+  // Country settings used by search and list matching:
+  // { datasets: [ds...], postcode: { ds, re, len, pad, upper } | null, hints: { abbr: regionKey } }
+  const AU_CFG = {
+    datasets: ['sal', 'poa'],
+    postcode: { ds: 'poa', re: '^\\d{3,4}$', pad: 4 },
+    hints: { nsw: 'nsw_act', act: 'nsw_act', vic: 'victoria', qld: 'queensland', sa: 'south_australia', wa: 'western_australia', tas: 'tasmania', nt: 'northern_territory' },
+  };
+
+  function postcodeCode(pc, token) {
+    let t = token.replace(/\s+/g, '');
+    if (!new RegExp(pc.re, 'i').test(t)) return null;
+    if (pc.len) t = t.slice(0, pc.len);
+    if (pc.pad) t = t.padStart(pc.pad, '0');
+    if (pc.upper) t = t.toUpperCase();
+    return t;
+  }
+
+  function search(lookup, query, cfg = AU_CFG, limit = 12) {
     const q = norm(query);
     if (!q) return [];
-    if (/^\d+$/.test(q)) {
-      return lookup.all.filter((i) => i.ds === 'poa' && i.code.startsWith(q)).slice(0, limit);
+    const inCountry = (i) => cfg.datasets.includes(i.ds);
+    const pc = cfg.postcode;
+    const compact = query.replace(/\s+/g, '').toUpperCase();
+    if (pc && /\d/.test(compact) && /^[A-Z0-9-]+$/.test(compact)) {
+      const out = lookup.all.filter((i) => i.ds === pc.ds && i.code.toUpperCase().startsWith(compact.slice(0, pc.len || 99)));
+      if (out.length) return out.slice(0, limit);
     }
     const starts = [];
     const contains = [];
     for (const i of lookup.all) {
-      if (i.ds !== 'sal') continue;
+      if (i.kind === 'postcode' || !inCountry(i)) continue;
       if (i.key.startsWith(q)) starts.push(i);
       else if (i.key.includes(q)) contains.push(i);
-      if (starts.length >= limit) break;
+      if (starts.length >= limit * 3) break;
     }
-    starts.sort((a, b) => (a.base === q ? -1 : 0) - (b.base === q ? -1 : 0));
+    starts.sort((a, b) => (a.base === q ? 0 : 1) - (b.base === q ? 0 : 1));
     return starts.concat(contains).slice(0, limit);
   }
 
   // ---------- pasted lists ----------
-  // Matches a pasted list of suburbs and/or postcodes.
-  // "Epping", "Epping NSW", "Epping (Vic.)", "Epping 2121", "2121" are all understood.
-  function matchList(lookup, text, preferredRegion) {
+  // Matches a pasted list of places and/or postcodes, e.g. (Australia)
+  // "Epping", "Epping NSW", "Epping (Vic.)", "Epping 2121", "2121".
+  function matchList(lookup, text, preferredRegion, cfg = AU_CFG) {
     const tokens = text.split(/[\n,;\t]+/).map((t) => t.trim()).filter(Boolean);
+    const hints = cfg.hints || {};
+    const hintKeys = Object.keys(hints).sort((a, b) => b.length - a.length);
+    const hintRe = hintKeys.length ? new RegExp(`^(.*?)[\\s(]+(${hintKeys.map(escRe).join('|')})\\.?\\)?$`, 'i') : null;
     const matched = [];
     const unmatched = [];
     const ambiguous = [];
     for (const token of tokens) {
-      let t = token;
-      // a bare postcode
-      if (/^\d{3,4}$/.test(t)) {
-        const code = t.padStart(4, '0');
-        const item = lookup.byId.get(`poa:${code}`);
-        if (item) matched.push(item);
-        else unmatched.push(token);
-        continue;
+      // a postcode on its own
+      if (cfg.postcode) {
+        const code = postcodeCode(cfg.postcode, token);
+        if (code) {
+          const item = lookup.byId.get(`${cfg.postcode.ds}:${code}`);
+          if (item) matched.push(item);
+          else unmatched.push(token);
+          continue;
+        }
       }
-      // pull off a trailing postcode and state, either bare or in brackets
+      // pull off a trailing postcode and state/province, either bare or in brackets
+      let t = token.replace(/\s+(\d{3,5}(-\d{4})?|[A-Za-z]\d[A-Za-z](\s?\d[A-Za-z]\d)?)$/, '');
       let state = null;
-      t = t.replace(/\s+\d{4}$/, '');
-      const sm = t.match(/^(.*?)[\s(]+(nsw|act|vic|qld|sa|wa|tas|nt)\.?\)?$/i);
-      if (sm) {
+      const sm = hintRe && t.match(hintRe);
+      if (sm && sm[1].trim()) {
         t = sm[1];
         state = sm[2].toLowerCase();
       }
-      let candidates = lookup.salByName.get(norm(t)) || [];
-      if (state && candidates.length > 1) {
+      let candidates = (lookup.byName.get(norm(t)) || []).filter((c) => cfg.datasets.includes(c.ds));
+      if (state) {
         const bySuffix = candidates.filter((c) => suffixState(c.name) === state);
-        const byRegion = candidates.filter((c) => c.region === STATE_ABBR[state]);
-        candidates = bySuffix.length ? bySuffix : byRegion.length ? byRegion : candidates;
-      } else if (state && candidates.length === 1 && candidates[0].region !== STATE_ABBR[state]) {
-        candidates = [];
+        const byRegion = candidates.filter((c) => c.region === hints[state]);
+        candidates = bySuffix.length ? bySuffix : byRegion;
       }
       if (candidates.length > 1 && preferredRegion) {
         const pref = candidates.filter((c) => c.region === preferredRegion);
@@ -312,7 +343,7 @@
   }
 
   return {
-    baseName, norm, buildLookup, search, matchList, buildKml, kmlColor, geometryKml,
+    baseName, norm, createLookup, addDataset, buildLookup, postcodeCode, search, matchList, buildKml, kmlColor, geometryKml,
     osmKind, osmKindLabel, osmName, summariseOsm, assembleRelation, roundGeom,
   };
 });

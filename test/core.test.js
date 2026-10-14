@@ -3,27 +3,27 @@ const assert = require('node:assert');
 const KZB = require('../site/core.js');
 
 const index = {
-  regions: { nsw_act: 'NSW & ACT', vic: 'Victoria', qld: 'Queensland' },
   datasets: {
     sal: {
       items: [
         ['1', 'Epping (NSW)', 'nsw_act'],
-        ['2', 'Epping (Vic.)', 'vic'],
+        ['2', 'Epping (Vic.)', 'victoria'],
         ['3', 'Carlingford', 'nsw_act'],
         ['4', 'Beecroft', 'nsw_act'],
         ['5', "O'Connor (ACT)", 'nsw_act'],
-        ['6', "O'Connor (WA)", 'wa'],
+        ['6', "O'Connor (WA)", 'western_australia'],
         ['7', 'North Epping', 'nsw_act'],
-        ['8', 'Ascot (Toowoomba - Qld)', 'qld'],
-        ['9', 'Ascot (WA)', 'wa'],
-        ['10', 'Ascot (Ballarat - Vic.)', 'vic'],
-        ['11', 'Ascot (Brisbane - Qld)', 'qld'],
+        ['8', 'Ascot (Toowoomba - Qld)', 'queensland'],
+        ['9', 'Ascot (WA)', 'western_australia'],
+        ['10', 'Ascot (Ballarat - Vic.)', 'victoria'],
+        ['11', 'Ascot (Brisbane - Qld)', 'queensland'],
       ],
     },
-    poa: { items: [['2121', '2121', 'nsw_act'], ['0800', '0800', 'nt']] },
+    poa: { items: [['2121', '2121', 'nsw_act'], ['0800', '0800', 'northern_territory']] },
   },
 };
 const lookup = KZB.buildLookup(index);
+
 const names = (items) => items.map((i) => i.name);
 
 test('search: names and postcodes', () => {
@@ -97,4 +97,25 @@ test('buildKml: custom outline, shading colour, opacity and width', () => {
   assert.ok(kml.includes('<Style id="zone0area"><LineStyle><color>e60000ff</color><width>2.5</width></LineStyle><PolyStyle><color>40ff0000</color></PolyStyle></Style>'));
   const none = KZB.buildKml([{ name: 'A', color: '#ff0000', fillOpacity: 0, outline: geom, areas: [] }]);
   assert.ok(none.includes('<PolyStyle><fill>0</fill></PolyStyle>'));
+});
+
+test('other countries: US ZIPs, Canadian FSAs and state/province hints', () => {
+  const lk = KZB.createLookup();
+  KZB.addDataset(lk, 'usplace', 'area', [['1', 'Springfield', 'illinois'], ['2', 'Springfield', 'missouri'], ['3', 'Chicago', 'illinois']]);
+  KZB.addDataset(lk, 'uszip', 'postcode', [['60601', '60601', 'zip_6'], ['02134', '02134', 'zip_0']]);
+  KZB.addDataset(lk, 'cafsa', 'postcode', [['M5V', 'M5V', 'ontario']]);
+  KZB.addDataset(lk, 'cacsd', 'area', [['9', 'Montréal', 'quebec']]);
+  const us = { datasets: ['usplace', 'uszip'], postcode: { ds: 'uszip', re: '^\\d{5}(-\\d{4})?$', len: 5 }, hints: { il: 'illinois', mo: 'missouri' } };
+  const r = KZB.matchList(lk, 'Springfield IL\nSpringfield, MO\n60601-1234\n02134\nChicago 60601\nSpringfield', 'texas', us);
+  assert.deepStrictEqual(r.matched.map((i) => i.id), ['usplace:1', 'uszip:60601', 'uszip:02134', 'usplace:3']);
+  // "Springfield, MO" splits on the comma into "Springfield" + "MO"
+  assert.deepStrictEqual(r.unmatched, ['MO']);
+  assert.strictEqual(r.ambiguous.length, 2);
+  assert.deepStrictEqual(KZB.search(lk, '6060', us).map((i) => i.code), ['60601']);
+  assert.deepStrictEqual(KZB.search(lk, 'spring', us).map((i) => i.id), ['usplace:1', 'usplace:2']);
+  const ca = { datasets: ['cacsd', 'cafsa'], postcode: { ds: 'cafsa', re: '^[A-Za-z]\\d[A-Za-z](\\d[A-Za-z]\\d)?$', len: 3, upper: true }, hints: { qc: 'quebec' } };
+  const c = KZB.matchList(lk, 'm5v 3l9\nMontreal QC\nm5v', null, ca);
+  assert.deepStrictEqual(c.matched.map((i) => i.id), ['cafsa:M5V', 'cacsd:9', 'cafsa:M5V']);
+  assert.deepStrictEqual(KZB.search(lk, 'montre', ca).map((i) => i.id), ['cacsd:9']);
+  assert.deepStrictEqual(KZB.search(lk, 'spring', ca), []);
 });
