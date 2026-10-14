@@ -228,22 +228,32 @@ async function arcgisToGeoJSON(source, dest) {
   const out = fs.createWriteStream(dest + '.part');
   out.write('{"type":"FeatureCollection","features":[\n');
   let first = true;
-  const BATCH = 100;
+  const skipped = [];
+  // Big batches sometimes make the server fail, so on an error split the batch in half and try again.
+  const fetchBatch = async (batch) => {
+    const body = new URLSearchParams({ objectIds: batch.join(','), outFields: '*', outSR: '4326', geometryPrecision: '6', f: 'geojson' });
+    try {
+      return (await getJson(`${layerUrl}/query?${body}`, batch.length > 1 ? 2 : 4)).features || [];
+    } catch (e) {
+      if (batch.length === 1) {
+        skipped.push(batch[0]);
+        return [];
+      }
+      const mid = Math.ceil(batch.length / 2);
+      return [...(await fetchBatch(batch.slice(0, mid))), ...(await fetchBatch(batch.slice(mid)))];
+    }
+  };
+  const BATCH = source.batch || 50;
   for (let i = 0; i < ids.length; i += BATCH) {
-    const batch = ids.slice(i, i + BATCH);
-    const body = new URLSearchParams({
-      objectIds: batch.join(','),
-      outFields: '*',
-      outSR: '4326',
-      geometryPrecision: '6',
-      f: 'geojson',
-    });
-    const fc = await getJson(`${layerUrl}/query?${body}`);
-    for (const f of fc.features || []) {
+    for (const f of await fetchBatch(ids.slice(i, i + BATCH))) {
       out.write((first ? '' : ',\n') + JSON.stringify(f));
       first = false;
     }
-    if ((i / BATCH) % 10 === 0) process.stdout.write(`  ${Math.min(i + BATCH, ids.length)}/${ids.length}\r`);
+    if ((i / BATCH) % 10 === 0) console.log(`  ${Math.min(i + BATCH, ids.length)}/${ids.length}`);
+  }
+  if (skipped.length) {
+    if (skipped.length > ids.length * 0.02) throw new Error(`${skipped.length} of ${ids.length} features could not be downloaded`);
+    console.log(`::warning::${path.basename(dest)}: skipped ${skipped.length} features the server could not return (ids ${skipped.slice(0, 20).join(', ')})`);
   }
   out.write('\n]}\n');
   await new Promise((r) => out.end(r));
