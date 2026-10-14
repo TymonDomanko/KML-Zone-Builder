@@ -264,13 +264,13 @@
     const zones = membership.get(id) || [];
     const active = activeZone();
     if (active && zones.includes(active.id)) {
-      return { color: active.color, weight: 1.4, opacity: 1, fillColor: active.fill, fillOpacity: 0.15 };
+      return { color: active.color, weight: 1.4, opacity: 1, dashArray: null, fillColor: active.fill, fillOpacity: 0.15 };
     }
     if (zones.length) {
       const other = state.zones.find((z) => z.id === zones[0]);
-      return { color: other ? other.color : '#555', weight: 0.8, opacity: 0.6, fillColor: '#000', fillOpacity: 0.01 };
+      return { color: other ? other.color : '#555', weight: 1, opacity: 0.7, dashArray: '5 3', fillColor: '#000', fillOpacity: 0.01 };
     }
-    return { color: '#4b4f55', weight: 0.7, opacity: 0.65, fillColor: '#000', fillOpacity: 0.01 };
+    return { color: '#1f2a44', weight: 1.1, opacity: 0.75, dashArray: '5 3', fillColor: '#000', fillOpacity: 0.01 };
   }
   function restyleAreas() {
     if (!areaLayer) return;
