@@ -69,6 +69,7 @@
   let areaLayer = null; // L.GeoJSON of the boundaries being shown
   const layerByCode = new Map();
   const outlineLayer = L.layerGroup().addTo(map);
+  window.KZBApp = { map, state, layers: () => ({ areaLayer, outlineLayer }) }; // handy for debugging
 
   // ---------- data ----------
   async function loadIndex() {
