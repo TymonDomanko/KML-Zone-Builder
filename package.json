@@ -1,0 +1,26 @@
+{
+  "name": "kml-zone-builder",
+  "version": "1.0.0",
+  "description": "Build KML zones from Australian suburbs and postcodes",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "build:data": "node scripts/build-data.mjs --out site/data",
+    "serve": "npx --yes http-server site -p 8080 -c-1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TymonDomanko/KML-Zone-Builder.git"
+  },
+  "author": "Tymon Domanko",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/TymonDomanko/KML-Zone-Builder/issues"
+  },
+  "homepage": "https://tymondomanko.github.io/KML-Zone-Builder/",
+  "devDependencies": {
+    "@turf/turf": "^7.4.0",
+    "mapshaper": "^0.7.85",
+    "topojson-client": "^3.1.0"
+  },
+  "private": true
+}

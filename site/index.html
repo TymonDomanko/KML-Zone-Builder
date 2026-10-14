@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>KML Zone Builder</title>
+  <meta name="description" content="Build KML zones from Australian suburbs and postcodes — no API keys.">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <aside id="panel">
+    <header>
+      <h1>KML Zone Builder</h1>
+      <p class="sub">Outline suburbs and postcodes, then download as KML.</p>
+    </header>
+
+    <section class="block">
+      <div class="row">
+        <div class="seg" role="group" aria-label="Boundaries shown on the map">
+          <button type="button" data-ds="sal" class="on">Suburbs</button>
+          <button type="button" data-ds="poa">Postcodes</button>
+        </div>
+        <select id="region" aria-label="State or territory"></select>
+      </div>
+      <div class="search">
+        <input id="search" type="search" placeholder="Search suburb or postcode to add…" autocomplete="off">
+        <ul id="results" hidden></ul>
+      </div>
+      <p class="hint">Click areas on the map to add or remove them from the selected zone.</p>
+    </section>
+
+    <section class="block">
+      <div class="row between">
+        <h2>Zones</h2>
+        <button type="button" id="addZone" class="btn">+ New zone</button>
+      </div>
+      <div id="zones"></div>
+    </section>
+
+    <section class="block">
+      <h2>Download</h2>
+      <label class="field">File name
+        <input id="fileName" type="text" value="zones">
+      </label>
+      <label class="check"><input id="folders" type="checkbox" checked> Put each zone in its own folder</label>
+      <label class="check"><input id="stripState" type="checkbox" checked> Drop state from suburb names, e.g. “Epping (NSW)” → “Epping”</label>
+      <button type="button" id="download" class="btn primary wide">Download KML (all zones)</button>
+      <div class="row">
+        <button type="button" id="saveProject" class="btn">Save project</button>
+        <label class="btn">Open project<input id="openProject" type="file" accept=".json,application/json" hidden></label>
+      </div>
+    </section>
+
+    <footer>
+      Boundaries: <a href="https://www.abs.gov.au/statistics/standards/australian-statistical-geography-standard-asgs-edition-3/jul2021-jun2026/access-and-downloads/digital-boundary-files" target="_blank" rel="noopener">ABS ASGS</a>
+      (Suburbs and Localities, Postal Areas), CC BY 4.0. Postal Areas approximate Australia Post postcodes.
+      Map © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors.
+      <span id="built"></span>
+    </footer>
+  </aside>
+
+  <main id="map"></main>
+  <div id="toast" hidden></div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@turf/turf@7.4.0/turf.min.js" defer></script>
+  <script src="core.js"></script>
+  <script src="app.js" defer></script>
+</body>
+</html>
