@@ -2,6 +2,9 @@
 (() => {
   'use strict';
 
+  // Deploys stamp ?v=<commit> on this script; reuse it so fresh data isn't hidden behind the browser cache.
+  const VERSION = (document.currentScript?.src.match(/[?&]v=([^&]+)/) || [])[1] || 'dev';
+
   const COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#0aa5b5', '#d6249f', '#808000', '#9a6324', '#000075'];
   const STORE_KEY = 'kml-zone-builder:project';
   const PASTE_EXAMPLES = {
@@ -54,7 +57,7 @@
         .filter((ds) => index.datasets[ds])
         .map((ds) => {
           if (!itemLoads.has(ds)) {
-            const p = fetch(`data/${ds}/items.json`)
+            const p = fetch(`data/${ds}/items.json?v=${VERSION}`)
               .then((r) => {
                 if (!r.ok) throw new Error(`Could not load ${ds} names`);
                 return r.json();
@@ -105,7 +108,7 @@
 
   // ---------- data ----------
   async function loadIndex() {
-    const res = await fetch('data/index.json');
+    const res = await fetch(`data/index.json?v=${VERSION}`);
     if (!res.ok) throw new Error('Boundary data not found (data/index.json). Has the data build run?');
     index = await res.json();
     if (index.built) $('#built').textContent = ` Data built ${index.built.slice(0, 10)}.`;
@@ -114,7 +117,7 @@
   function loadRegion(ds, region) {
     const key = `${ds}/${region}`;
     if (!regionCache.has(key)) {
-      const p = fetch(`data/${ds}/${region}.json`)
+      const p = fetch(`data/${ds}/${region}.json?v=${VERSION}`)
         .then((r) => {
           if (!r.ok) throw new Error(`Could not load ${key}`);
           return r.json();
