@@ -1,0 +1,29 @@
+name: Probe boundary URLs
+on:
+  push:
+    branches: [probe-urls]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: ca-fsa
+        continue-on-error: true
+        run: curl -fsSL -A "Mozilla/5.0 (X11; Linux x86_64) Chrome/126.0" -r 0-2000 -o /tmp/a "https://www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lfsa000b21a_e.zip" && head -c 2 /tmp/a | grep -q PK
+      - name: ca-csd
+        continue-on-error: true
+        run: curl -fsSL -A "Mozilla/5.0 (X11; Linux x86_64) Chrome/126.0" -r 0-2000 -o /tmp/a "https://www12.statcan.gc.ca/census-recensement/2021/geo/sip-pis/boundary-limites/files-fichiers/lcsd000b21a_e.zip" && head -c 2 /tmp/a | grep -q PK
+      - name: ca-arcgis
+        continue-on-error: true
+        run: curl -fsSL "https://geo.statcan.gc.ca/geo_wa/rest/services/2021/Cartographic_boundary_files/MapServer/14?f=pjson" | grep -q CFSAUID
+      - name: us-zcta
+        continue-on-error: true
+        run: curl -fsSL -r 0-2000 -o /tmp/a "https://www2.census.gov/geo/tiger/GENZ2020/shp/cb_2020_us_zcta520_500k.zip" && head -c 2 /tmp/a | grep -q PK
+      - name: us-place
+        continue-on-error: true
+        run: curl -fsSL -r 0-2000 -o /tmp/a "https://www2.census.gov/geo/tiger/GENZ2025/shp/cb_2025_us_place_500k.zip" && head -c 2 /tmp/a | grep -q PK
+      - name: nz-linz
+        continue-on-error: true
+        run: curl -fsSL "https://services.arcgis.com/xdsHIIxuCWByZiCB/ArcGIS/rest/services/LINZ_NZ_Suburbs_and_Localities/FeatureServer/0/query?where=1%3D1&outFields=name&resultRecordCount=2&f=geojson" | grep -q FeatureCollection
+      - name: nl-cbs-pc4
+        continue-on-error: true
+        run: curl -fsSL -A "Mozilla/5.0" -r 0-2000 -o /tmp/a "https://download.cbs.nl/postcode/2024-cbs_pc4_2023_v1.zip" && head -c 2 /tmp/a | grep -q PK
