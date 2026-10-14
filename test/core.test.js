@@ -14,9 +14,10 @@ const index = {
         ['5', "O'Connor (ACT)", 'nsw_act'],
         ['6', "O'Connor (WA)", 'wa'],
         ['7', 'North Epping', 'nsw_act'],
-        ['8', 'Ascot (Qld)', 'qld'],
+        ['8', 'Ascot (Toowoomba - Qld)', 'qld'],
         ['9', 'Ascot (WA)', 'wa'],
-        ['10', 'Ascot (Vic.)', 'vic'],
+        ['10', 'Ascot (Ballarat - Vic.)', 'vic'],
+        ['11', 'Ascot (Brisbane - Qld)', 'qld'],
       ],
     },
     poa: { items: [['2121', '2121', 'nsw_act'], ['0800', '0800', 'nt']] },
@@ -47,8 +48,10 @@ test('matchList: ambiguous names are reported', () => {
   const r = KZB.matchList(lookup, 'Ascot', 'nsw_act');
   assert.strictEqual(r.matched.length, 0);
   assert.strictEqual(r.ambiguous.length, 1);
-  assert.strictEqual(r.ambiguous[0].options.length, 3);
+  assert.strictEqual(r.ambiguous[0].options.length, 4);
   assert.deepStrictEqual(names(KZB.matchList(lookup, 'Ascot WA', 'nsw_act').matched), ['Ascot (WA)']);
+  assert.deepStrictEqual(names(KZB.matchList(lookup, 'Ascot VIC', 'nsw_act').matched), ['Ascot (Ballarat - Vic.)']);
+  assert.strictEqual(KZB.matchList(lookup, 'Ascot QLD', 'nsw_act').ambiguous[0].options.length, 2);
   assert.deepStrictEqual(KZB.matchList(lookup, 'Carlingford VIC').unmatched, ['Carlingford VIC']);
 });
 

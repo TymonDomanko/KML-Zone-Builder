@@ -185,8 +185,11 @@ async function buildDataset(key) {
     regions[region] = { count: obj.geometries.length, bbox: topo.bbox.map((n) => +n.toFixed(4)), bytes: json.length };
     console.log(`  ${key}/${region}.json  ${obj.geometries.length} areas  ${(json.length / 1e6).toFixed(2)} MB`);
   }
+  const order = Object.keys(REGIONS);
+  const sortedRegions = {};
+  for (const r of order) if (regions[r]) sortedRegions[r] = regions[r];
   items.sort((a, b) => a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]));
-  return { label: ds.label, source: ds.url, regions, items };
+  return { label: ds.label, source: ds.url, regions: sortedRegions, items };
 }
 
 // ---------- main ----------

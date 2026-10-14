@@ -17,7 +17,10 @@
   }
   function suffixState(name) {
     const m = name.match(SUFFIX_RE);
-    return m ? m[1].replace(/\./g, '').trim().toLowerCase() : null;
+    if (!m) return null;
+    // "(NSW)", "(Vic.)", "(Ballarat - Vic.)" -> "nsw", "vic", "vic"
+    const st = m[1].replace(/\./g, '').trim().toLowerCase().match(/(nsw|act|vic|qld|sa|wa|tas|nt)$/);
+    return st ? st[1] : null;
   }
   function norm(s) {
     return s.toLowerCase().replace(/[’'`]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
