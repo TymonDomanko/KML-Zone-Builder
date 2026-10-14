@@ -156,6 +156,8 @@ const COUNTRIES = {
         source: { arcgis: 'https://services.arcgis.com/xdsHIIxuCWByZiCB/ArcGIS/rest/services/LINZ_NZ_Suburbs_and_Localities/FeatureServer/0' },
         code: /^id$/,
         name: /^name$/,
+        // leave out bays, lakes and conservation land; keep places people live
+        filter: `['Suburb','Locality','Island'].indexOf(type) > -1`,
         // some suburbs straddle councils ("Auckland, Waikato District"): file them under the first one
         region: { field: /^territorial_authority$/, first: true, other: 'Other' },
       },
@@ -356,6 +358,7 @@ async function buildDataset(country, key, ds) {
   const cmd = [
     `-i "${input}" ${/\.shp$/i.test(input) ? 'encoding=utf8' : ''}`,
     `-filter '!this.isNull'`,
+    ds.filter ? `-filter "${ds.filter}"` : '',
     `-proj wgs84`,
     `-each "${parts.join(', ')}"`,
     `-filter-fields code,name,region,rlabel,hint`,

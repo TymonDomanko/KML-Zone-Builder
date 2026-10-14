@@ -440,7 +440,11 @@
       const cfg = countryCfg();
       if (!cfg.datasets.includes(state.ds)) state.ds = cfg.datasets[0];
       const regions = index.datasets[state.ds].regions;
-      if (!regions[state.region]) state.region = Object.keys(regions)[0];
+      if (!regions[state.region]) {
+        // start on the biggest region (by number of areas)
+        const ranked = Object.entries(regions).filter(([, r]) => !/outside|other/i.test(r.label)).sort((a, b) => b[1].count - a[1].count);
+        state.region = (ranked[0] || Object.entries(regions)[0])[0];
+      }
       const names = cfg.datasets.map((ds) => index.datasets[ds].label.toLowerCase());
       $('#search').placeholder = `Search ${names.join(' or ')} to add…`;
       $('#auControls .seg').replaceChildren(
