@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>KML Zone Builder</title>
-  <meta name="description" content="Build KML zones from Australian suburbs and postcodes — no API keys.">
+  <meta name="description" content="Build KML zones from suburbs and postcodes — Australia and worldwide, no API keys.">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
   <link rel="stylesheet" href="style.css?v=dev">
 </head>
@@ -16,12 +16,22 @@
     </header>
 
     <section class="block">
-      <div class="row">
+      <label class="field">Country
+        <select id="country"></select>
+      </label>
+      <div id="auControls" class="row">
         <div class="seg" role="group" aria-label="Boundaries shown on the map">
           <button type="button" data-ds="sal" class="on">Suburbs</button>
           <button type="button" data-ds="poa">Postcodes</button>
         </div>
         <select id="region" aria-label="State or territory"></select>
+      </div>
+      <div id="osmControls" hidden>
+        <div class="row">
+          <select id="osmType" aria-label="Boundary type" disabled><option>Press “Show boundaries here”</option></select>
+          <button type="button" id="osmScan" class="btn">Show boundaries here</button>
+        </div>
+        <p class="hint" id="osmStatus">Boundaries come from OpenStreetMap. Zoom the map to the area you want, then press “Show boundaries here”. What's available varies by country.</p>
       </div>
       <div class="search">
         <input id="search" type="search" placeholder="Search suburb or postcode to add…" autocomplete="off">
@@ -55,7 +65,8 @@
     <footer>
       Boundaries: <a href="https://www.abs.gov.au/statistics/standards/australian-statistical-geography-standard-asgs-edition-3/jul2021-jun2026/access-and-downloads/digital-boundary-files" target="_blank" rel="noopener">ABS ASGS</a>
       (Suburbs and Localities, Postal Areas), CC BY 4.0. Postal Areas approximate Australia Post postcodes.
-      Map © <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors.
+      Other countries: boundaries and search from <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> (ODbL), via Overpass and Nominatim.
+      Map © OpenStreetMap contributors.
       <span id="built"></span>
     </footer>
   </aside>

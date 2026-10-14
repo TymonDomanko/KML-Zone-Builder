@@ -4,7 +4,17 @@
 
   const COLORS = ['#e6194b', '#3cb44b', '#4363d8', '#f58231', '#911eb4', '#0aa5b5', '#d6249f', '#808000', '#9a6324', '#000075'];
   const STORE_KEY = 'kml-zone-builder:project';
-  const DS_LABEL = { sal: 'Suburb', poa: 'Postcode' };
+  const DS_LABEL = { sal: 'Suburb', poa: 'Postcode', osm: 'OpenStreetMap' };
+  const OVERPASS = [
+    'https://overpass-api.de/api/interpreter',
+    'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+    'https://overpass.private.coffee/api/interpreter',
+    'https://overpass.kumi.systems/api/interpreter',
+  ];
+  const NOMINATIM = 'https://nominatim.openstreetmap.org';
+  // ISO 3166-1 alpha-2 codes; names come from the browser.
+  const COUNTRY_CODES =
+    'AD AE AF AG AI AL AM AO AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GT GU GW GY HK HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS XK YE YT ZA ZM ZW'.split(' ');
 
   // ---------- state ----------
   const state = {
@@ -12,12 +22,17 @@
     activeId: null,
     ds: 'sal',
     region: 'nsw_act',
+    country: 'AU', // AU uses the ABS data; anything else uses OpenStreetMap
+    osm: {}, // OSM areas used in zones: id -> { name, kind, detail, geom }
+    osmKind: null,
     settings: { fileName: 'zones', folders: true, stripState: true },
   };
   let index = null; // data/index.json
   let lookup = null; // KZB.buildLookup(index)
   const regionCache = new Map(); // "ds/region" -> Promise<{ topo, geoms: Map(code -> topo geometry), features: Map(code -> GeoJSON) }>
   let membership = new Map(); // item id -> [zone ids]
+  const osmLoaded = new Map(); // OSM areas currently shown on the map: id -> GeoJSON feature
+  const isAU = () => state.country === 'AU';
 
   // ---------- dom ----------
   const $ = (sel) => document.querySelector(sel);
@@ -83,8 +98,18 @@
     return regionCache.get(key);
   }
 
+  function getItem(id) {
+    if (id.startsWith('osm:')) {
+      const o = state.osm[id];
+      return o ? { id, ds: 'osm', region: 'osm', code: id, name: o.name, kind: o.kind, detail: o.detail } : null;
+    }
+    return lookup.byId.get(id) || null;
+  }
   function itemsOf(zone) {
-    return zone.items.map((id) => lookup.byId.get(id)).filter(Boolean);
+    return zone.items.map(getItem).filter(Boolean);
+  }
+  function itemPlace(item) {
+    return item.ds === 'osm' ? item.detail || item.kind || '' : index.regions[item.region];
   }
 
   // Combined outline of a zone. Areas from the same file are merged on their shared topology,
@@ -92,12 +117,17 @@
   // with postcodes) are then unioned geometrically.
   async function zoneOutline(zone) {
     const groups = new Map();
+    const osmParts = [];
     for (const item of itemsOf(zone)) {
+      if (item.ds === 'osm') {
+        osmParts.push(state.osm[item.id].geom);
+        continue;
+      }
       const key = `${item.ds}/${item.region}`;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(item);
     }
-    if (!groups.size) return null;
+    if (!groups.size && !osmParts.length) return null;
     const parts = [];
     for (const [key, items] of groups) {
       const [ds, region] = key.split('/');
@@ -105,6 +135,7 @@
       const geoms = items.map((i) => data.geoms.get(i.code)).filter(Boolean);
       parts.push(topojson.merge(data.topo, geoms));
     }
+    parts.push(...osmParts);
     if (parts.length === 1) return parts[0];
     if (typeof turf === 'undefined') throw new Error('Geometry library still loading — try again in a moment.');
     const merged = turf.union(turf.featureCollection(parts.map((g) => turf.feature(g))));
@@ -112,6 +143,7 @@
   }
 
   async function areaGeometry(item) {
+    if (item.ds === 'osm') return state.osm[item.id]?.geom || null;
     const data = await loadRegion(item.ds, item.region);
     const f = data.features.get(item.code);
     return f ? f.geometry : null;
@@ -154,6 +186,7 @@
   }
   function itemLabel(item, forExport) {
     if (item.ds === 'poa') return item.code;
+    if (item.ds === 'osm') return item.name;
     return forExport && state.settings.stripState ? KZB.baseName(item.name) : item.name;
   }
 
@@ -173,17 +206,26 @@
 
   // ---------- persistence ----------
   function projectData() {
-    return { app: 'kml-zone-builder', version: 1, zones: state.zones, activeId: state.activeId, settings: state.settings };
+    // keep only the OSM areas that are still in a zone
+    const used = new Set(state.zones.flatMap((z) => z.items));
+    for (const id of Object.keys(state.osm)) if (!used.has(id)) delete state.osm[id];
+    return { app: 'kml-zone-builder', version: 2, zones: state.zones, activeId: state.activeId, settings: state.settings, osm: state.osm };
   }
   function save() {
     try {
-      localStorage.setItem(STORE_KEY, JSON.stringify({ ...projectData(), ds: state.ds, region: state.region }));
+      localStorage.setItem(STORE_KEY, JSON.stringify({ ...projectData(), ds: state.ds, region: state.region, country: state.country, osmKind: state.osmKind }));
     } catch (e) {
       /* storage unavailable — fine */
     }
   }
   function applyProject(p) {
     if (!p || !Array.isArray(p.zones)) throw new Error('Not a KML Zone Builder project');
+    state.osm = {};
+    for (const [id, o] of Object.entries(p.osm || {})) {
+      if (/^osm:[nwr]\d+$/.test(id) && o && o.geom && /^(Multi)?Polygon$/.test(o.geom.type)) {
+        state.osm[id] = { name: String(o.name || id), kind: String(o.kind || ''), detail: String(o.detail || ''), geom: o.geom };
+      }
+    }
     state.zones = p.zones
       .filter((z) => z && Array.isArray(z.items))
       .map((z, i) => ({
@@ -193,7 +235,7 @@
         fill: /^#[0-9a-f]{6}$/i.test(z.fill) ? z.fill : /^#[0-9a-f]{6}$/i.test(z.color) ? z.color : COLORS[i % COLORS.length],
         fillOpacity: Number.isFinite(z.fillOpacity) ? Math.max(0, Math.min(1, z.fillOpacity)) : 0.25,
         width: Number.isFinite(z.width) ? Math.max(1, Math.min(10, z.width)) : 3,
-        items: z.items.filter((id) => typeof id === 'string'),
+        items: z.items.filter((id) => typeof id === 'string' && (!id.startsWith('osm:') || state.osm[id])),
         outline: z.outline !== false,
         individual: z.individual !== false,
       }));
@@ -201,6 +243,8 @@
     if (p.settings) Object.assign(state.settings, p.settings);
     if (p.ds && index.datasets[p.ds]) state.ds = p.ds;
     if (p.region && index.datasets[state.ds].regions[p.region]) state.region = p.region;
+    if (p.country && COUNTRY_CODES.includes(p.country)) state.country = p.country;
+    if (p.osmKind) state.osmKind = p.osmKind;
   }
   function restore() {
     try {
@@ -213,7 +257,7 @@
 
   // ---------- area layer ----------
   function styleFor(feature) {
-    const id = `${state.ds}:${feature.properties.code}`;
+    const id = feature.properties.id || `${state.ds}:${feature.properties.code}`;
     const zones = membership.get(id) || [];
     const active = activeZone();
     if (active && zones.includes(active.id)) {
@@ -236,7 +280,7 @@
     const ds = state.ds;
     const region = state.region;
     const data = await loadRegion(ds, region);
-    if (token !== showToken) return;
+    if (token !== showToken || !isAU()) return;
     if (areaLayer) map.removeLayer(areaLayer);
     layerByCode.clear();
     areaLayer = L.geoJSON(
@@ -264,7 +308,12 @@
   function toggleArea(id) {
     const zone = ensureActive();
     const i = zone.items.indexOf(id);
-    const item = lookup.byId.get(id);
+    if (id.startsWith('osm:') && !state.osm[id]) {
+      const f = osmLoaded.get(id);
+      if (!f) return;
+      state.osm[id] = { name: f.properties.name, kind: f.properties.kind, detail: f.properties.detail, geom: f.geometry };
+    }
+    const item = getItem(id);
     if (i >= 0) {
       zone.items.splice(i, 1);
       toast(`Removed ${item ? item.name : id} from ${zone.name}`, 1500);
@@ -321,7 +370,18 @@
   }
 
   async function goToItem(item) {
-    if (item.ds !== state.ds || item.region !== state.region) {
+    if (item.ds === 'osm') {
+      const g = state.osm[item.id]?.geom;
+      if (g) map.fitBounds(L.geoJSON(g).getBounds(), { padding: [60, 60], maxZoom: 15 });
+      return;
+    }
+    const switching = !isAU();
+    if (switching) {
+      state.country = 'AU';
+      save();
+      syncControls();
+    }
+    if (switching || item.ds !== state.ds || item.region !== state.region) {
       state.ds = item.ds;
       state.region = item.region;
       syncControls();
@@ -333,6 +393,10 @@
 
   // ---------- sidebar ----------
   function syncControls() {
+    $('#country').value = state.country;
+    $('#auControls').hidden = !isAU();
+    $('#osmControls').hidden = isAU();
+    $('#search').placeholder = isAU() ? 'Search suburb or postcode to add…' : 'Search a place or postcode to add…';
     document.querySelectorAll('.seg button').forEach((b) => b.classList.toggle('on', b.dataset.ds === state.ds));
     const sel = $('#region');
     sel.replaceChildren(
@@ -439,7 +503,7 @@
         chips.append(
           el(
             'span',
-            { class: 'chip', title: `${DS_LABEL[item.ds]} · ${index.regions[item.region]}` },
+            { class: 'chip', title: `${DS_LABEL[item.ds]} · ${itemPlace(item)}` },
             el('a', { href: '#', style: 'color:inherit;text-decoration:none', onclick: (e) => { e.preventDefault(); goToItem(item); } }, item.name),
             others ? el('span', { class: 'also', title: `Also in ${others} other zone${others > 1 ? 's' : ''}` }, ` +${others}`) : null,
             el('button', { class: 'x', type: 'button', title: 'Remove', onclick: () => { z.items = z.items.filter((id) => id !== item.id); changed(); } }, '×')
@@ -451,14 +515,18 @@
 
       const msg = el('div', { class: 'msg' });
       msg.innerHTML = keep.pasteMsg;
-      const ta = el('textarea', { placeholder: 'One per line or comma-separated, e.g.\nEpping, Carlingford, Beecroft\n2121\nEpping VIC' });
+      const ta = el('textarea', {
+        placeholder: isAU()
+          ? 'One per line or comma-separated, e.g.\nEpping, Carlingford, Beecroft\n2121\nEpping VIC'
+          : 'One per line or comma-separated, e.g.\nMitte, Moabit\n10115',
+      });
       ta.value = keep.pasteText;
       const paste = el(
         'details',
         { class: 'paste', open: keep.openPaste },
         el('summary', {}, 'Paste a list of suburbs or postcodes'),
         ta,
-        el('button', { type: 'button', class: 'btn small', onclick: () => addPasted(z, ta, msg) }, 'Add to zone'),
+        el('button', { type: 'button', class: 'btn small', onclick: (e) => (isAU() ? addPasted(z, ta, msg) : addPastedOsm(z, ta, msg, e.target)) }, 'Add to zone'),
         msg
       );
       body.append(paste);
@@ -533,6 +601,251 @@
     changed();
   }
 
+  // ---------- OpenStreetMap (countries other than Australia) ----------
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  function osmStatus(text) {
+    $('#osmStatus').textContent = text;
+  }
+
+  // Overpass servers are run by volunteers and get busy, so try a few.
+  async function overpass(query) {
+    let last = null;
+    for (const ep of OVERPASS) {
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 60000);
+      try {
+        const r = await fetch(ep, { method: 'POST', body: 'data=' + encodeURIComponent(query), signal: ac.signal });
+        if (!r.ok) {
+          last = `${new URL(ep).host} answered ${r.status}`;
+          continue;
+        }
+        return await r.json();
+      } catch (e) {
+        last = `${new URL(ep).host}: ${e.name === 'AbortError' ? 'timed out' : e.message}`;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    throw new Error(`OpenStreetMap boundary servers are busy right now — try again in a minute (${last}).`);
+  }
+
+  // Nominatim allows one request a second.
+  let nominatimNext = 0;
+  async function nominatim(path, params) {
+    const wait = nominatimNext - Date.now();
+    nominatimNext = Math.max(Date.now(), nominatimNext) + 1100;
+    if (wait > 0) await sleep(wait);
+    const u = new URL(`${NOMINATIM}/${path}`);
+    for (const [k, v] of Object.entries({ format: 'jsonv2', ...params })) u.searchParams.set(k, v);
+    const r = await fetch(u);
+    if (!r.ok) throw new Error(`Search failed (${r.status})`);
+    return r.json();
+  }
+  function hasOutline(x) {
+    return x.geojson && /^(Multi)?Polygon$/.test(x.geojson.type);
+  }
+  function nominatimItem(x) {
+    const id = `osm:${x.osm_type[0]}${x.osm_id}`;
+    const parts = x.display_name.split(', ');
+    return {
+      id,
+      ds: 'osm',
+      region: 'osm',
+      code: id,
+      name: x.name || parts[0],
+      kind: x.addresstype || x.type,
+      detail: parts.slice(1, 4).join(', '),
+      geom: hasOutline(x) ? KZB.roundGeom(x.geojson) : null,
+    };
+  }
+  async function searchOsm(q, limit = 8) {
+    const res = await nominatim('search', { q, countrycodes: state.country.toLowerCase(), polygon_geojson: 1, limit });
+    const seen = new Set();
+    return res.map(nominatimItem).filter((i) => !seen.has(i.id) && seen.add(i.id));
+  }
+  function rememberOsm(item) {
+    state.osm[item.id] = { name: item.name, kind: item.kind, detail: item.detail, geom: item.geom };
+  }
+
+  function viewBox() {
+    const b = map.getBounds();
+    return [b.getSouth(), b.getWest(), b.getNorth(), b.getEast()].map((n) => n.toFixed(5)).join(',');
+  }
+  function kindQuery(kind, bb) {
+    if (kind === 'postal') return `relation["boundary"="postal_code"](${bb});`;
+    if (kind.startsWith('admin:')) return `relation["boundary"="administrative"]["admin_level"="${kind.slice(6)}"](${bb});`;
+    return `relation["place"="${kind.slice(6)}"](${bb});`;
+  }
+
+  async function osmScan() {
+    if (map.getZoom() < 9) {
+      osmStatus('Zoom in further first — to a city or district — then press “Show boundaries here”.');
+      return;
+    }
+    const btn = $('#osmScan');
+    btn.disabled = true;
+    osmStatus('Looking for boundaries in this view…');
+    try {
+      const bb = viewBox();
+      const json = await overpass(
+        `[out:json][timeout:40];(relation["boundary"="administrative"]["admin_level"](${bb});` +
+          `relation["boundary"="postal_code"](${bb});` +
+          `relation["place"~"^(suburb|quarter|neighbourhood|town|village|city|borough|hamlet|locality)$"](${bb}););out tags;`
+      );
+      const groups = KZB.summariseOsm(json.elements);
+      const sel = $('#osmType');
+      if (!groups.length) {
+        sel.replaceChildren(el('option', {}, 'None found here'));
+        sel.disabled = true;
+        osmStatus('OpenStreetMap has no suburb, postcode or council boundaries in this view. Try searching instead.');
+        return;
+      }
+      if (!groups.some((g) => g.key === state.osmKind)) {
+        state.osmKind = (groups.find((g) => g.key === 'postal' || g.key.startsWith('place:')) || groups[0]).key;
+      }
+      sel.replaceChildren(
+        ...groups.map((g) =>
+          el('option', { value: g.key, selected: g.key === state.osmKind }, `${g.label} (${g.count}) — e.g. ${g.examples.join(', ')}`)
+        )
+      );
+      sel.disabled = false;
+      await osmLoad();
+    } catch (e) {
+      osmStatus(e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function osmLoad() {
+    const kind = state.osmKind;
+    if (!kind) return;
+    const label = KZB.osmKindLabel(kind).toLowerCase();
+    osmStatus(`Loading ${label}…`);
+    try {
+      const json = await overpass(`[out:json][timeout:90];(${kindQuery(kind, viewBox())});out geom;`);
+      osmLoaded.clear();
+      const features = [];
+      for (const e of json.elements) {
+        const geometry = KZB.assembleRelation(e);
+        if (!geometry) continue;
+        const f = {
+          type: 'Feature',
+          properties: { id: `osm:r${e.id}`, name: KZB.osmName(e.tags || {}), kind, detail: KZB.osmKindLabel(kind) },
+          geometry,
+        };
+        osmLoaded.set(f.properties.id, f);
+        features.push(f);
+      }
+      if (isAU()) return;
+      showOsmLayer(features);
+      osmStatus(
+        features.length
+          ? `${features.length} ${label} shown. Click them to add to or remove from the selected zone. Move the map and press the button again to load more.`
+          : `No complete ${label} outlines here.`
+      );
+    } catch (e) {
+      osmStatus(e.message);
+    }
+  }
+
+  function showOsmLayer(features) {
+    if (areaLayer) map.removeLayer(areaLayer);
+    layerByCode.clear();
+    areaLayer = L.geoJSON(
+      { type: 'FeatureCollection', features },
+      {
+        renderer,
+        style: styleFor,
+        onEachFeature: (feature, layer) => {
+          layer.bindTooltip(feature.properties.name, { sticky: true, direction: 'top', offset: [0, -6] });
+          layer.on('mouseover', () => layer.setStyle({ weight: 3 }));
+          layer.on('mouseout', () => layer.setStyle(styleFor(feature)));
+          layer.on('click', () => toggleArea(feature.properties.id));
+        },
+      }
+    ).addTo(map);
+  }
+
+  async function setCountry(code) {
+    state.country = code;
+    save();
+    syncControls();
+    if (areaLayer) {
+      map.removeLayer(areaLayer);
+      areaLayer = null;
+    }
+    if (isAU()) return showRegion(true);
+    osmLoaded.clear();
+    $('#osmType').replaceChildren(el('option', {}, 'Press “Show boundaries here”'));
+    $('#osmType').disabled = true;
+    osmStatus('Zoom the map to the area you want, then press “Show boundaries here”. You can also search or paste a list.');
+    try {
+      const name = new Intl.DisplayNames(['en'], { type: 'region' }).of(code);
+      const [c] = await nominatim('search', { country: name, countrycodes: code.toLowerCase(), limit: 1 });
+      if (c && state.country === code) {
+        const [s, n, w, e] = c.boundingbox.map(Number);
+        map.fitBounds([[s, w], [n, e]]);
+      }
+    } catch (e) {
+      /* stay where we are */
+    }
+  }
+
+  async function addPastedOsm(zone, ta, msg, btn) {
+    const tokens = ta.value.split(/[\n,;\t]+/).map((t) => t.trim()).filter(Boolean);
+    if (!tokens.length) return;
+    btn.disabled = true;
+    const found = [];
+    const unmatched = [];
+    const noOutline = [];
+    const ambiguous = [];
+    for (let i = 0; i < tokens.length; i++) {
+      const token = tokens[i];
+      msg.textContent = `Looking up ${i + 1} of ${tokens.length}: ${token}…`;
+      try {
+        const results = await searchOsm(token, 5);
+        const withOutline = results.filter((r) => r.geom);
+        const exact = withOutline.filter((r) => KZB.norm(r.name) === KZB.norm(token));
+        const pick = exact.length === 1 ? exact : withOutline.length === 1 ? withOutline : null;
+        if (pick) found.push(pick[0]);
+        else if (withOutline.length) ambiguous.push({ token, options: withOutline });
+        else if (results.length) noOutline.push(token);
+        else unmatched.push(token);
+      } catch (e) {
+        unmatched.push(token);
+      }
+    }
+    found.forEach(rememberOsm);
+    const added = addItems(zone, found);
+    msg.replaceChildren(`Added ${added} area${added === 1 ? '' : 's'}${found.length > added ? ` (${found.length - added} already in zone)` : ''}.`);
+    if (unmatched.length) msg.append(el('br'), el('span', { class: 'bad' }, `Not found: ${unmatched.join(', ')}`));
+    if (noOutline.length) {
+      msg.append(el('br'), el('span', { class: 'bad' }, `Found but OpenStreetMap has no outline for: ${noOutline.join(', ')}`));
+    }
+    for (const amb of ambiguous) {
+      msg.append(el('br'), `“${amb.token}” matches several — pick: `);
+      for (const opt of amb.options) {
+        msg.append(
+          el('button', {
+            type: 'button',
+            class: 'btn small pick',
+            title: opt.detail,
+            onclick: (e) => {
+              rememberOsm(opt);
+              addItems(zone, [opt]);
+              e.target.disabled = true;
+              changed();
+            },
+          }, `${opt.name} (${opt.detail})`)
+        );
+      }
+    }
+    ta.value = [...unmatched, ...noOutline, ...ambiguous.map((a) => a.token)].join('\n');
+    btn.disabled = false;
+    changed();
+  }
+
   // ---------- search ----------
   function setupSearch() {
     const input = $('#search');
@@ -544,6 +857,10 @@
       results = [];
     };
     const pick = async (item) => {
+      if (item.ds === 'osm') {
+        if (!item.geom) return toast(`OpenStreetMap has no outline for ${item.name}`, 2500);
+        rememberOsm(item);
+      }
       const zone = ensureActive();
       const added = addItems(zone, [item]);
       toast(added ? `Added ${item.name} to ${zone.name}` : `${item.name} is already in ${zone.name}`, 1800);
@@ -557,18 +874,43 @@
         ...results.map((item, i) =>
           el(
             'li',
-            { class: i === sel ? 'sel' : '', onmousedown: (e) => { e.preventDefault(); pick(item); } },
+            { class: (i === sel ? 'sel' : '') + (item.ds === 'osm' && !item.geom ? ' off' : ''), onmousedown: (e) => { e.preventDefault(); pick(item); } },
             el('span', {}, item.name),
-            el('span', { class: 'meta' }, `${DS_LABEL[item.ds]} · ${index.regions[item.region]}`)
+            el(
+              'span',
+              { class: 'meta' },
+              item.ds === 'osm' ? (item.geom ? `${item.kind} · ${item.detail}` : 'no outline in OpenStreetMap') : `${DS_LABEL[item.ds]} · ${index.regions[item.region]}`
+            )
           )
         )
       );
       list.hidden = !results.length;
     };
+    let timer;
+    let token = 0;
     input.addEventListener('input', () => {
-      results = KZB.search(lookup, input.value);
-      sel = 0;
-      draw();
+      clearTimeout(timer);
+      if (isAU()) {
+        results = KZB.search(lookup, input.value);
+        sel = 0;
+        draw();
+        return;
+      }
+      const q = input.value.trim();
+      if (q.length < 2) return close();
+      timer = setTimeout(async () => {
+        const mine = ++token;
+        try {
+          const found = await searchOsm(q);
+          if (mine !== token) return;
+          results = found;
+          sel = Math.max(0, results.findIndex((r) => r.geom));
+          draw();
+          if (!results.length) toast(`Nothing found for “${q}”`, 1800);
+        } catch (e) {
+          toast(e.message, 3000);
+        }
+      }, 600);
     });
     input.addEventListener('keydown', (e) => {
       if (list.hidden) return;
@@ -612,7 +954,11 @@
         out.push({ name: z.name, color: z.color, fill: z.fill, fillOpacity: z.fillOpacity, width: z.width, outline, areas, description: names.join(', ') });
       }
       const name = safeFileName(fileName);
-      const kml = KZB.buildKml(out, { docName: name, folders: state.settings.folders });
+      const used = usable.flatMap(itemsOf);
+      const credits = [];
+      if (used.some((i) => i.ds !== 'osm')) credits.push('Australian boundaries © Australian Bureau of Statistics, CC BY 4.0');
+      if (used.some((i) => i.ds === 'osm')) credits.push('Boundaries © OpenStreetMap contributors, ODbL');
+      const kml = KZB.buildKml(out, { docName: name, folders: state.settings.folders, description: credits.join('. ') });
       download(`${name}.kml`, kml, 'application/vnd.google-earth.kml+xml');
       toast(`Downloaded ${name}.kml`);
     } catch (e) {
@@ -625,7 +971,7 @@
   function wire() {
     document.querySelectorAll('.seg button').forEach((b) =>
       b.addEventListener('click', () => {
-        if (state.ds === b.dataset.ds) return;
+        if (state.ds === b.dataset.ds || !isAU()) return;
         state.ds = b.dataset.ds;
         if (!index.datasets[state.ds].regions[state.region]) state.region = Object.keys(index.datasets[state.ds].regions)[0];
         syncControls();
@@ -633,6 +979,20 @@
         showRegion(false);
       })
     );
+    const names = new Intl.DisplayNames(['en'], { type: 'region' });
+    const countries = COUNTRY_CODES.map((c) => [c, names.of(c) || c]).sort((a, b) => a[1].localeCompare(b[1]));
+    $('#country').replaceChildren(
+      el('option', { value: 'AU' }, 'Australia (ABS suburbs & postcodes)'),
+      ...countries.filter(([c]) => c !== 'AU').map(([c, n]) => el('option', { value: c }, `${n} (OpenStreetMap)`))
+    );
+    $('#country').value = state.country;
+    $('#country').addEventListener('change', (e) => setCountry(e.target.value));
+    $('#osmScan').addEventListener('click', osmScan);
+    $('#osmType').addEventListener('change', (e) => {
+      state.osmKind = e.target.value;
+      save();
+      osmLoad();
+    });
     $('#region').addEventListener('change', (e) => {
       state.region = e.target.value;
       save();
@@ -657,7 +1017,11 @@
         applyProject(JSON.parse(await file.text()));
         syncControls();
         changed();
-        await showRegion(false);
+        if (isAU()) await showRegion(false);
+        else if (areaLayer) {
+          map.removeLayer(areaLayer);
+          areaLayer = null;
+        }
         if (activeZone()) zoomToZone(activeZone());
         toast(`Opened ${file.name}`);
       } catch (err) {
@@ -681,8 +1045,9 @@
     syncControls();
     wire();
     changed();
-    await showRegion(!state.zones.some((z) => z.items.length));
+    if (isAU()) await showRegion(!state.zones.some((z) => z.items.length));
     if (activeZone() && activeZone().items.length) zoomToZone(activeZone());
+    else if (!isAU()) setCountry(state.country);
   }
 
   start();

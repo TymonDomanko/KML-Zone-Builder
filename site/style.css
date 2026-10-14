@@ -140,3 +140,6 @@ footer a { color: inherit; }
 .zone-style input[type=color] { width: 30px; height: 24px; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: none; cursor: pointer; }
 .zone-style input[type=range] { flex: 1; min-width: 0; accent-color: var(--zc, var(--accent)); }
 .zone-style .val { min-width: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+#results li.off { opacity: 0.55; cursor: not-allowed; }
+#osmControls select { flex: 1; min-width: 0; }
+#osmControls .row { flex-wrap: nowrap; }

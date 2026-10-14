@@ -177,6 +177,7 @@
     out.push('<?xml version="1.0" encoding="UTF-8"?>');
     out.push('<kml xmlns="http://www.opengis.net/kml/2.2"><Document>');
     out.push(`<name>${esc(options.docName || 'Zones')}</name>`);
+    if (options.description) out.push(`<description>${esc(options.description)}</description>`);
     zones.forEach((z, i) => {
       const fill = z.fill || z.color;
       const op = z.fillOpacity == null ? 0.25 : Math.max(0, Math.min(1, z.fillOpacity));
@@ -209,5 +210,109 @@
     return out.join('\n');
   }
 
-  return { baseName, norm, buildLookup, search, matchList, buildKml, kmlColor, geometryKml };
+  // ---------- OpenStreetMap ----------
+  const PLACE_RE = /^(suburb|quarter|neighbourhood|town|village|city|borough|hamlet|locality)$/;
+
+  // Which kind of boundary an OSM relation is, as a key the page can group by.
+  function osmKind(tags) {
+    if (!tags) return null;
+    if (tags.boundary === 'postal_code') return 'postal';
+    if (tags.boundary === 'administrative' && tags.admin_level) return `admin:${tags.admin_level}`;
+    if (tags.place && PLACE_RE.test(tags.place)) return `place:${tags.place}`;
+    return null;
+  }
+  function osmKindLabel(kind) {
+    if (kind === 'postal') return 'Postcodes';
+    if (kind.startsWith('admin:')) return `Admin level ${kind.slice(6)}`;
+    if (kind.startsWith('place:')) {
+      const p = kind.slice(6);
+      return `Places: ${p}s`.replace('ys', 'ies').replace('hs', 'hes');
+    }
+    return kind;
+  }
+  function osmName(tags) {
+    const pc = tags.postal_code || (tags.boundary === 'postal_code' ? tags.ref : null);
+    const name = tags['name:en'] || tags.name;
+    if (pc && name && name !== pc) return `${pc} ${name}`;
+    return pc || name || tags.ref || 'Unnamed';
+  }
+
+  // Groups relations from an Overpass "out tags" reply into boundary kinds, most local first.
+  function summariseOsm(elements) {
+    const groups = new Map();
+    for (const e of elements) {
+      const kind = osmKind(e.tags);
+      if (!kind) continue;
+      if (!groups.has(kind)) groups.set(kind, []);
+      groups.get(kind).push(osmName(e.tags));
+    }
+    const rank = (k) => (k === 'postal' ? 100 : k.startsWith('admin:') ? 50 + Number(k.slice(6)) : 40);
+    return [...groups.entries()]
+      .map(([key, names]) => ({ key, label: osmKindLabel(key), count: names.length, examples: names.sort().slice(0, 3) }))
+      .sort((a, b) => rank(b.key) - rank(a.key));
+  }
+
+  const r6 = (n) => Math.round(n * 1e6) / 1e6;
+  function roundGeom(geom) {
+    if (!geom) return geom;
+    const ring = (r) => r.map((p) => [r6(p[0]), r6(p[1])]);
+    if (geom.type === 'Polygon') return { type: 'Polygon', coordinates: geom.coordinates.map(ring) };
+    if (geom.type === 'MultiPolygon') return { type: 'MultiPolygon', coordinates: geom.coordinates.map((p) => p.map(ring)) };
+    return null;
+  }
+
+  function pointInRing(pt, ring) {
+    let inside = false;
+    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+      const [xi, yi] = ring[i];
+      const [xj, yj] = ring[j];
+      if (yi > pt[1] !== yj > pt[1] && pt[0] < ((xj - xi) * (pt[1] - yi)) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
+
+  // Joins way segments (arrays of [lon, lat]) end to end into closed rings.
+  function joinRings(ways) {
+    const key = (p) => `${p[0]},${p[1]}`;
+    const left = ways.filter((w) => w.length >= 2).map((w) => w.slice());
+    const rings = [];
+    while (left.length) {
+      let ring = left.shift();
+      let guard = 0;
+      while (key(ring[0]) !== key(ring[ring.length - 1]) && guard++ < 100000) {
+        const end = key(ring[ring.length - 1]);
+        const i = left.findIndex((w) => key(w[0]) === end || key(w[w.length - 1]) === end);
+        if (i < 0) break;
+        let w = left.splice(i, 1)[0];
+        if (key(w[0]) !== end) w = w.reverse();
+        ring = ring.concat(w.slice(1));
+      }
+      if (ring.length >= 4 && key(ring[0]) === key(ring[ring.length - 1])) rings.push(ring);
+    }
+    return rings;
+  }
+
+  // Builds a GeoJSON (Multi)Polygon from an Overpass relation returned with "out geom".
+  function assembleRelation(rel) {
+    const outer = [];
+    const inner = [];
+    for (const m of rel.members || []) {
+      if (m.type !== 'way' || !m.geometry) continue;
+      const coords = m.geometry.filter(Boolean).map((g) => [r6(g.lon), r6(g.lat)]);
+      (m.role === 'inner' ? inner : outer).push(coords);
+    }
+    const outers = joinRings(outer);
+    if (!outers.length) return null;
+    const polys = outers.map((r) => [r]);
+    for (const hole of joinRings(inner)) {
+      const owner = polys.find((p) => pointInRing(hole[0], p[0]));
+      if (owner) owner.push(hole);
+    }
+    return polys.length === 1 ? { type: 'Polygon', coordinates: polys[0] } : { type: 'MultiPolygon', coordinates: polys };
+  }
+
+  return {
+    baseName, norm, buildLookup, search, matchList, buildKml, kmlColor, geometryKml,
+    osmKind, osmKindLabel, osmName, summariseOsm, assembleRelation, roundGeom,
+  };
 });

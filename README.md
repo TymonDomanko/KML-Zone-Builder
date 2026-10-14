@@ -1,6 +1,7 @@
 # KML Zone Builder
 
-Build KML zones from Australian suburbs and postcodes, right in the browser. No API keys, no sign-up.
+Build KML zones from suburbs and postcodes, right in the browser. Australia uses official ABS boundaries;
+every other country uses OpenStreetMap. No API keys, no sign-up.
 
 **Open it:** https://tymondomanko.github.io/KML-Zone-Builder/
 
@@ -17,7 +18,7 @@ Build KML zones from Australian suburbs and postcodes, right in the browser. No 
   Individual areas use the same colours with a thinner line and half the shading, so they sit under the combined outline.
 - **Download** all zones in one KML (a folder per zone, or a flat list), or download a single zone.
 - **Save / open projects** as a small `.zones.json` file. Your current work is also kept in the browser.
-- Suburbs and postcodes can be mixed in one zone, and zones can cross state borders.
+- Suburbs and postcodes can be mixed in one zone, and zones can cross state (or country) borders.
 
 The KML files work with Google Earth, Google My Maps and the other KML tools
 ([KML Zone Merger](https://github.com/TymonDomanko/KML-Zone-Merger),
@@ -25,6 +26,21 @@ The KML files work with Google Earth, Google My Maps and the other KML tools
 [KML Zone Pictures](https://github.com/TymonDomanko/KML-Zone-Pictures)).
 
 ## Where the boundaries come from
+
+### Other countries (OpenStreetMap)
+
+Pick a country at the top. Then either:
+
+- zoom the map to a city or district and press **Show boundaries here** – the tool lists the boundary types
+  OpenStreetMap has in view (postcodes, suburbs/places, council or admin levels) and shows the one you pick, ready to click; or
+- **search** or **paste a list** of places/postcodes (looked up with Nominatim).
+
+Coverage depends on what volunteers have mapped: e.g. Germany and the Netherlands have postcode outlines,
+the UK has council wards, but many suburbs worldwide are only mapped as a point, which can't be outlined.
+The tool tells you when something has no outline. Overpass servers are volunteer-run and sometimes busy –
+if loading fails, wait a minute and try again. Boundaries © OpenStreetMap contributors, ODbL.
+
+### Australia (ABS)
 
 Australian Bureau of Statistics, Australian Statistical Geography Standard (ASGS) Edition 3, 2021:
 
